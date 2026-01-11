@@ -286,8 +286,8 @@ GSRendererType GSUtil::GetPreferredRenderer()
 		// Default to DX12 on Windows-on-ARM.
 		preferred_renderer = GSRendererType::DX12;
 #elif defined(_WIN32)
-		// Use D3D device info to select renderer.
-		preferred_renderer = D3D::GetPreferredRenderer();
+		// Force DX9 for RTX Remix compatibility.
+		preferred_renderer = GSRendererType::DX9;
 #else
 		// Linux: Prefer Vulkan if the driver isn't buggy.
 #if defined(ENABLE_VULKAN)

@@ -16,6 +16,7 @@
 enum class RenderAPI
 {
 	None,
+	D3D9,
 	D3D11,
 	Metal,
 	D3D12,

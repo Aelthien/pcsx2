@@ -36,6 +36,7 @@
 
 #ifdef _WIN32
 
+#include "GS/Renderers/DX9/GSDevice9.h"
 #include "GS/Renderers/DX11/GSDevice11.h"
 #include "GS/Renderers/DX12/GSDevice12.h"
 #include "GS/Renderers/DX11/D3D.h"
@@ -86,6 +87,9 @@ static RenderAPI GetAPIForRenderer(GSRendererType renderer)
 			return RenderAPI::Vulkan;
 
 #ifdef _WIN32
+		case GSRendererType::DX9:
+			return RenderAPI::D3D9;
+
 		case GSRendererType::DX11:
 			return RenderAPI::D3D11;
 
@@ -111,6 +115,9 @@ static bool OpenGSDevice(GSRendererType renderer, bool clear_state_on_fail, bool
 	switch (new_api)
 	{
 #ifdef _WIN32
+		case RenderAPI::D3D9:
+			g_gs_device = std::make_unique<GSDevice9>();
+			break;
 		case RenderAPI::D3D11:
 			g_gs_device = std::make_unique<GSDevice11>();
 			break;

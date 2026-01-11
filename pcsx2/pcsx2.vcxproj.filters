@@ -217,6 +217,9 @@
     <Filter Include="System\Ps2\GS\Renderers\Direct3D11">
       <UniqueIdentifier>{6e0dc702-cb44-4a22-a595-4cbd335f31a4}</UniqueIdentifier>
     </Filter>
+    <Filter Include="System\Ps2\GS\Renderers\Direct3D9">
+      <UniqueIdentifier>{a1b2c3d4-e5f6-7890-abcd-ef1234567890}</UniqueIdentifier>
+    </Filter>
     <Filter Include="System\Ps2\GS\Shaders\Direct3D">
       <UniqueIdentifier>{eb697f5b-85f5-424a-a7e4-8d8b73d3426e}</UniqueIdentifier>
     </Filter>
@@ -1238,6 +1241,12 @@
     <ClCompile Include="GSDumpReplayer.cpp">
       <Filter>Tools</Filter>
     </ClCompile>
+    <ClCompile Include="GS\Renderers\DX9\GSDevice9.cpp">
+      <Filter>System\Ps2\GS\Renderers\Direct3D9</Filter>
+    </ClCompile>
+    <ClCompile Include="GS\Renderers\DX9\GSTexture9.cpp">
+      <Filter>System\Ps2\GS\Renderers\Direct3D9</Filter>
+    </ClCompile>
     <ClCompile Include="GS\Renderers\DX11\D3D11ShaderCache.cpp">
       <Filter>System\Ps2\GS\Renderers\Direct3D11</Filter>
     </ClCompile>
@@ -2204,6 +2213,12 @@
     </ClInclude>
     <ClInclude Include="GS.h">
       <Filter>System\Ps2\GS\GIF</Filter>
+    </ClInclude>
+    <ClInclude Include="GS\Renderers\DX9\GSDevice9.h">
+      <Filter>System\Ps2\GS\Renderers\Direct3D9</Filter>
+    </ClInclude>
+    <ClInclude Include="GS\Renderers\DX9\GSTexture9.h">
+      <Filter>System\Ps2\GS\Renderers\Direct3D9</Filter>
     </ClInclude>
     <ClInclude Include="GS\Renderers\DX11\D3D11ShaderCache.h">
       <Filter>System\Ps2\GS\Renderers\Direct3D11</Filter>

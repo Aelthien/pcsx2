@@ -271,6 +271,7 @@ enum class LimiterModeType : u8
 enum class GSRendererType : s8
 {
 	Auto = -1,
+	DX9 = 2,
 	DX11 = 3,
 	Null = 11,
 	OGL = 12,

@@ -230,6 +230,7 @@ const char* GSDevice::RenderAPIToString(RenderAPI api)
 		// clang-format off
 #define CASE(x) case RenderAPI::x: return #x
 		CASE(None);
+		CASE(D3D9);
 		CASE(D3D11);
 		CASE(D3D12);
 		CASE(Metal);

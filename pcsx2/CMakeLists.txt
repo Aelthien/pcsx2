@@ -680,6 +680,8 @@ if(WIN32)
 	)
 
 	list(APPEND pcsx2GSSources
+		GS/Renderers/DX9/GSDevice9.cpp
+		GS/Renderers/DX9/GSTexture9.cpp
 		GS/Renderers/DX11/D3D.cpp
 		GS/Renderers/DX11/D3D11ShaderCache.cpp
 		GS/Renderers/DX11/GSDevice11.cpp
@@ -692,6 +694,8 @@ if(WIN32)
 		GS/Renderers/DX12/GSTexture12.cpp
 	)
 	list(APPEND pcsx2GSHeaders
+		GS/Renderers/DX9/GSDevice9.h
+		GS/Renderers/DX9/GSTexture9.h
 		GS/Renderers/DX11/D3D.h
 		GS/Renderers/DX11/D3D11ShaderCache.h
 		GS/Renderers/DX11/GSDevice11.h
@@ -1176,6 +1180,7 @@ if(WIN32)
 		hid.lib
 		PowrProf.lib
 		d3dcompiler.lib
+		d3d9.lib
 		d3d11.lib
 		d3d12.lib
 		dxgi.lib
