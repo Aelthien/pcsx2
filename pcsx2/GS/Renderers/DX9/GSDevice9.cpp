@@ -560,9 +560,9 @@ void GSDevice9::RenderHW(GSHWDrawConfig& config)
 	m_dev->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
 
 	// Enable alpha testing to handle cutout textures (foliage, fences, etc.)
-	// Discard pixels with alpha below threshold
+	// Use low threshold to avoid culling semi-transparent hair
 	m_dev->SetRenderState(D3DRS_ALPHATESTENABLE, TRUE);
-	m_dev->SetRenderState(D3DRS_ALPHAREF, 128);  // ~50% alpha threshold
+	m_dev->SetRenderState(D3DRS_ALPHAREF, 1);  // Very low threshold - only discard fully transparent
 	m_dev->SetRenderState(D3DRS_ALPHAFUNC, D3DCMP_GREATEREQUAL);
 
 	// Texture stage state
