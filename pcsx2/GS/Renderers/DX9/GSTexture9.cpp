@@ -159,7 +159,26 @@ bool GSTexture9::Update(const GSVector4i& r, const void* data, int pitch, int la
 	const int copy_pitch = copy_width * bpp;
 	for (int y = 0; y < copy_height; y++)
 	{
-		std::memcpy(dst, src, copy_pitch);
+		if (bpp == 4 && m_format == Format::Color)
+		{
+			// Swizzle RGBA to BGRA for D3D9
+			const u32* src32 = reinterpret_cast<const u32*>(src);
+			u32* dst32 = reinterpret_cast<u32*>(dst);
+			for (int x = 0; x < copy_width; x++)
+			{
+				u32 pixel = src32[x];
+				// RGBA -> BGRA: swap R and B
+				u32 r = (pixel >> 0) & 0xFF;
+				u32 g = (pixel >> 8) & 0xFF;
+				u32 b = (pixel >> 16) & 0xFF;
+				u32 a = (pixel >> 24) & 0xFF;
+				dst32[x] = (a << 24) | (r << 16) | (g << 8) | b;
+			}
+		}
+		else
+		{
+			std::memcpy(dst, src, copy_pitch);
+		}
 		src += pitch;
 		dst += lr.Pitch;
 	}

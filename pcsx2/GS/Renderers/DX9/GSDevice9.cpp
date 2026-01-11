@@ -528,20 +528,14 @@ void GSDevice9::RenderHW(GSHWDrawConfig& config)
 	// Fixed function pipeline setup
 	m_dev->SetRenderState(D3DRS_LIGHTING, FALSE);
 	m_dev->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
-	m_dev->SetRenderState(D3DRS_ZENABLE, config.ds ? TRUE : FALSE);
-	m_dev->SetRenderState(D3DRS_ZWRITEENABLE, config.depth.zwe ? TRUE : FALSE);
+	
+	// PS2 games rely on draw order (painter's algorithm), not depth buffering
+	// Disable depth testing to preserve original draw order
+	m_dev->SetRenderState(D3DRS_ZENABLE, D3DZB_FALSE);
+	m_dev->SetRenderState(D3DRS_ZWRITEENABLE, FALSE);
 
-	// Setup alpha blending based on config
-	if (config.blend.enable)
-	{
-		m_dev->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
-		m_dev->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_SRCALPHA);
-		m_dev->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA);
-	}
-	else
-	{
-		m_dev->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
-	}
+	// Disable alpha blending for now - PS2 blending is complex
+	m_dev->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
 
 	// Texture stage state
 	if (config.tex)
@@ -591,7 +585,10 @@ void GSDevice9::RenderHW(GSHWDrawConfig& config)
 		// So we pass the raw integer value, not divided by 16
 		float x = static_cast<float>(v.XYZ.X);
 		float y = static_cast<float>(v.XYZ.Y);
-		float z = static_cast<float>(v.XYZ.Z) / static_cast<float>(0xFFFFFFFF);
+		
+		// Z is 32-bit, normalize to [0,1] range for D3D9
+		// Use double precision to avoid precision loss
+		float z = static_cast<float>(static_cast<double>(v.XYZ.Z) / static_cast<double>(0xFFFFFFFFu));
 
 		// Transform to NDC (matching the real shader: pos * scale - offset)
 		// Note: Y scale is negated in the shader
@@ -600,13 +597,15 @@ void GSDevice9::RenderHW(GSHWDrawConfig& config)
 
 		// NDC [-1,1] to screen [0, size]
 		// D3D9 RHW needs the -0.5 texel offset
+		// D3D9 has Y=0 at top, so flip: (1 - ndc_y) instead of (ndc_y + 1)
 		d.x = (ndc_x + 1.0f) * 0.5f * rt_width - 0.5f;
-		d.y = (ndc_y + 1.0f) * 0.5f * rt_height - 0.5f;
+		d.y = (1.0f - ndc_y) * 0.5f * rt_height - 0.5f;
 		d.z = z;
 		d.rhw = 1.0f;
 
 		// Color from RGBAQ
-		d.color = D3DCOLOR_RGBA(v.RGBAQ.R, v.RGBAQ.G, v.RGBAQ.B, v.RGBAQ.A);
+		// D3DCOLOR is ARGB format (0xAARRGGBB)
+		d.color = D3DCOLOR_ARGB(255, v.RGBAQ.R, v.RGBAQ.G, v.RGBAQ.B);
 
 		// Texture coordinates
 		if (config.tex)
@@ -642,47 +641,8 @@ void GSDevice9::RenderHW(GSHWDrawConfig& config)
 			break;
 	}
 
-	// DEBUG: Draw a test triangle to verify rendering works
-	static int frame_count = 0;
-	frame_count++;
-	if (frame_count % 600 == 1) // Log once every ~10 seconds
-	{
-		printf("DX9 RenderHW: nverts=%u, prim_count=%u, rt=%dx%d, sx=%.6f sy=%.6f ox=%.4f oy=%.4f\n",
-			nverts, prim_count, rt_width, rt_height, sx, sy, ox, oy);
-		if (nverts > 0)
-		{
-			float raw_x = static_cast<float>(src[0].XYZ.X);
-			float raw_y = static_cast<float>(src[0].XYZ.Y);
-			float ndc_x = raw_x * sx - ox;
-			float ndc_y = raw_y * (-sy) + oy;
-			printf("  raw: %.0f,%.0f  ndc: %.4f,%.4f  screen: %.2f,%.2f\n",
-				raw_x, raw_y, ndc_x, ndc_y, transformed[0].x, transformed[0].y);
-		}
-		fflush(stdout);
-	}
-
-	GSVertexDX9 testTri[3] = {
-		{100.0f, 100.0f, 0.5f, 1.0f, D3DCOLOR_RGBA(255, 0, 0, 255), 0.0f, 0.0f},
-		{200.0f, 100.0f, 0.5f, 1.0f, D3DCOLOR_RGBA(0, 255, 0, 255), 1.0f, 0.0f},
-		{150.0f, 200.0f, 0.5f, 1.0f, D3DCOLOR_RGBA(0, 0, 255, 255), 0.5f, 1.0f},
-	};
-	m_dev->SetTexture(0, nullptr);
-	m_dev->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_SELECTARG1);
-	m_dev->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_DIFFUSE);
-	m_dev->DrawPrimitiveUP(D3DPT_TRIANGLELIST, 1, testTri, sizeof(GSVertexDX9));
-
 	if (prim_count > 0)
 	{
-		// Restore texture state
-		if (config.tex)
-		{
-			GSTexture9* tex9 = static_cast<GSTexture9*>(config.tex);
-			m_dev->SetTexture(0, tex9->GetTexture());
-			m_dev->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_MODULATE);
-			m_dev->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
-			m_dev->SetTextureStageState(0, D3DTSS_COLORARG2, D3DTA_DIFFUSE);
-		}
-
 		if (config.indices && config.nindices > 0)
 		{
 			u32 index_prim_count = config.nindices / 3;
