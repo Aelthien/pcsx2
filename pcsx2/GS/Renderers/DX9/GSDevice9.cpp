@@ -117,11 +117,20 @@ bool GSDevice9::CreateBuffers()
 	if (FAILED(m_dev->CreateIndexBuffer(INDEX_BUFFER_SIZE * sizeof(u16), D3DUSAGE_DYNAMIC | D3DUSAGE_WRITEONLY, D3DFMT_INDEX16, D3DPOOL_DEFAULT, &m_ib, nullptr)))
 		return false;
 
+	// Create default depth buffer matching backbuffer size
+	if (FAILED(m_dev->CreateDepthStencilSurface(m_pp.BackBufferWidth, m_pp.BackBufferHeight, D3DFMT_D24S8, D3DMULTISAMPLE_NONE, 0, FALSE, &m_default_ds, nullptr)))
+		return false;
+
 	return true;
 }
 
 void GSDevice9::DestroyBuffers()
 {
+	if (m_default_ds)
+	{
+		m_default_ds->Release();
+		m_default_ds = nullptr;
+	}
 	if (m_ib)
 	{
 		m_ib->Release();
@@ -509,6 +518,14 @@ void GSDevice9::RenderHW(GSHWDrawConfig& config)
 	// Set render targets
 	OMSetRenderTargets(config.rt, config.ds, &config.scissor);
 
+	// Clear render target if it's in cleared state (prevents ghosting)
+	if (config.rt && config.rt->GetState() == GSTexture::State::Cleared)
+	{
+		u32 clear_color = config.rt->GetClearColor();
+		m_dev->Clear(0, nullptr, D3DCLEAR_TARGET, clear_color, 1.0f, 0);
+		config.rt->SetState(GSTexture::State::Dirty);
+	}
+
 
 	// Set texture if available
 	if (config.tex)
@@ -529,13 +546,24 @@ void GSDevice9::RenderHW(GSHWDrawConfig& config)
 	m_dev->SetRenderState(D3DRS_LIGHTING, FALSE);
 	m_dev->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
 	
-	// PS2 games rely on draw order (painter's algorithm), not depth buffering
-	// Disable depth testing to preserve original draw order
-	m_dev->SetRenderState(D3DRS_ZENABLE, D3DZB_FALSE);
-	m_dev->SetRenderState(D3DRS_ZWRITEENABLE, FALSE);
+	// Always use our default depth buffer for proper depth sorting
+	if (m_default_ds)
+		m_dev->SetDepthStencilSurface(m_default_ds);
+
+	// Enable depth testing but respect game's depth write setting
+	// Skyboxes typically have depth write disabled (zwe=0)
+	m_dev->SetRenderState(D3DRS_ZENABLE, D3DZB_TRUE);
+	m_dev->SetRenderState(D3DRS_ZWRITEENABLE, config.depth.zwe ? TRUE : FALSE);
+	m_dev->SetRenderState(D3DRS_ZFUNC, D3DCMP_LESSEQUAL);
 
 	// Disable alpha blending for now - PS2 blending is complex
 	m_dev->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
+
+	// Enable alpha testing to handle cutout textures (foliage, fences, etc.)
+	// Discard pixels with alpha below threshold
+	m_dev->SetRenderState(D3DRS_ALPHATESTENABLE, TRUE);
+	m_dev->SetRenderState(D3DRS_ALPHAREF, 128);  // ~50% alpha threshold
+	m_dev->SetRenderState(D3DRS_ALPHAFUNC, D3DCMP_GREATEREQUAL);
 
 	// Texture stage state
 	if (config.tex)
@@ -586,9 +614,9 @@ void GSDevice9::RenderHW(GSHWDrawConfig& config)
 		float x = static_cast<float>(v.XYZ.X);
 		float y = static_cast<float>(v.XYZ.Y);
 		
-		// Z is 32-bit, normalize to [0,1] range for D3D9
-		// Use double precision to avoid precision loss
-		float z = static_cast<float>(static_cast<double>(v.XYZ.Z) / static_cast<double>(0xFFFFFFFFu));
+		// Z is 32-bit - PS2 uses larger Z for closer objects (reversed depth)
+		// Invert so larger PS2 Z becomes smaller D3D Z (closer to camera)
+		float z = 1.0f - static_cast<float>(static_cast<double>(v.XYZ.Z) / static_cast<double>(0xFFFFFFFFu));
 
 		// Transform to NDC (matching the real shader: pos * scale - offset)
 		// Note: Y scale is negated in the shader
@@ -901,14 +929,15 @@ GSDevice::PresentResult GSDevice9::BeginPresent(bool frame_skip)
 		return PresentResult::FrameSkipped;
 
 	m_dev->SetRenderTarget(0, backbuffer);
-	m_dev->SetDepthStencilSurface(nullptr);
+	m_dev->SetDepthStencilSurface(m_default_ds);
 	backbuffer->Release();
 
 	// BeginScene is required for D3D9 rendering
 	if (FAILED(m_dev->BeginScene()))
 		return PresentResult::FrameSkipped;
 
-	m_dev->Clear(0, nullptr, D3DCLEAR_TARGET, D3DCOLOR_ARGB(0, 0, 0, 0), 1.0f, 0);
+	// Clear both color and depth buffer - dark orange background
+	m_dev->Clear(0, nullptr, D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER, D3DCOLOR_ARGB(255, 139, 69, 19), 1.0f, 0);
 
 	// Set viewport
 	D3DVIEWPORT9 vp = {};

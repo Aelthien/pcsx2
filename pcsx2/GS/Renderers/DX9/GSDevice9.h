@@ -94,6 +94,9 @@ private:
 		IDirect3DPixelShader9* ps[static_cast<int>(PresentShader::Count)];
 	} m_present = {};
 
+	// Default depth buffer for rendering
+	IDirect3DSurface9* m_default_ds = nullptr;
+
 	// Cached states
 	std::unordered_map<u32, IDirect3DPixelShader9*> m_ps_cache;
 	std::unordered_map<u32, IDirect3DVertexShader9*> m_vs_cache;
