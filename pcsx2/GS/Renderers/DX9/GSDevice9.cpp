@@ -126,6 +126,13 @@ bool GSDevice9::CreateBuffers()
 
 void GSDevice9::DestroyBuffers()
 {
+	if (m_rt_ds)
+	{
+		m_rt_ds->Release();
+		m_rt_ds = nullptr;
+		m_rt_ds_width = 0;
+		m_rt_ds_height = 0;
+	}
 	if (m_default_ds)
 	{
 		m_default_ds->Release();
@@ -262,29 +269,61 @@ void GSDevice9::CopyRect(GSTexture* sTex, GSTexture* dTex, const GSVector4i& r, 
 
 void GSDevice9::DrawStretchRect(const GSVector4& sRect, const GSVector4& dRect, const GSVector2i& ds)
 {
-	// Use pretransformed vertices with screen coordinates
-	// The -0.5f offset is the D3D9 texel-to-pixel mapping correction
-	const float left = dRect.x - 0.5f;
-	const float top = dRect.y - 0.5f;
-	const float right = dRect.z - 0.5f;
-	const float bottom = dRect.w - 0.5f;
+	// Use perspective projection for RTX Remix camera compatibility
+	const float left = dRect.x;
+	const float top = dRect.y;
+	const float right = dRect.z;
+	const float bottom = dRect.w;
 
-	// Use position + texcoord + color vertex format
-	struct VertexPT1C {
-		float x, y, z, rhw;
+	// Set up perspective projection matching RenderHW
+	float camDist = 500.0f;
+	float fovY = 2.0f * atanf((ds.y * 0.5f) / camDist);
+	float aspect = (float)ds.x / (float)ds.y;
+	float zn = 1.0f, zf = 10000.0f;
+	float yScale = 1.0f / tanf(fovY * 0.5f);
+	float xScale = yScale / aspect;
+
+	D3DMATRIX identity = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
+	D3DMATRIX proj = {
+		xScale, 0, 0, 0,
+		0, yScale, 0, 0,
+		0, 0, zf / (zf - zn), 1,
+		0, 0, -zn * zf / (zf - zn), 0
+	};
+	m_dev->SetTransform(D3DTS_WORLD, &identity);
+	m_dev->SetTransform(D3DTS_VIEW, &identity);
+	m_dev->SetTransform(D3DTS_PROJECTION, &proj);
+
+	// Convert screen coords to world space (matching RenderHW)
+	// NDC: map [0,ds] to [-1,1]
+	float ndc_left = (left / ds.x) * 2.0f - 1.0f;
+	float ndc_right = (right / ds.x) * 2.0f - 1.0f;
+	float ndc_top = 1.0f - (top / ds.y) * 2.0f;
+	float ndc_bottom = 1.0f - (bottom / ds.y) * 2.0f;
+
+	// World space coords
+	float world_left = ndc_left * (ds.x * 0.5f);
+	float world_right = ndc_right * (ds.x * 0.5f);
+	float world_top = ndc_top * (ds.y * 0.5f);
+	float world_bottom = ndc_bottom * (ds.y * 0.5f);
+
+	// Vertex with position, normal, color, texcoord
+	struct VertexPT1 {
+		float x, y, z;
+		float nx, ny, nz;
 		DWORD color;
 		float u, v;
 	};
 
-	VertexPT1C vertices[4] = {
-		{left,  top,    0.0f, 1.0f, D3DCOLOR_XRGB(0,255,255), sRect.x, sRect.y},
-		{right, top,    0.0f, 1.0f, D3DCOLOR_XRGB(0,255,255), sRect.z, sRect.y},
-		{left,  bottom, 0.0f, 1.0f, D3DCOLOR_XRGB(0,255,255), sRect.x, sRect.w},
-		{right, bottom, 0.0f, 1.0f, D3DCOLOR_XRGB(0,255,255), sRect.z, sRect.w},
+	VertexPT1 vertices[4] = {
+		{world_left,  world_top,    camDist, 0,0,-1, D3DCOLOR_XRGB(255,255,255), sRect.x, sRect.y},
+		{world_right, world_top,    camDist, 0,0,-1, D3DCOLOR_XRGB(255,255,255), sRect.z, sRect.y},
+		{world_left,  world_bottom, camDist, 0,0,-1, D3DCOLOR_XRGB(255,255,255), sRect.x, sRect.w},
+		{world_right, world_bottom, camDist, 0,0,-1, D3DCOLOR_XRGB(255,255,255), sRect.z, sRect.w},
 	};
 
-	m_dev->SetFVF(D3DFVF_XYZRHW | D3DFVF_DIFFUSE | D3DFVF_TEX1);
-	m_dev->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, vertices, sizeof(VertexPT1C));
+	m_dev->SetFVF(D3DFVF_XYZ | D3DFVF_NORMAL | D3DFVF_DIFFUSE | D3DFVF_TEX1);
+	m_dev->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, vertices, sizeof(VertexPT1));
 }
 
 void GSDevice9::DoStretchRect(GSTexture* sTex, const GSVector4& sRect, GSTexture* dTex, const GSVector4& dRect,
@@ -515,16 +554,22 @@ void GSDevice9::RenderHW(GSHWDrawConfig& config)
 	if (!config.verts || config.nverts == 0 || !m_dev)
 		return;
 
-	// Set render targets
-	OMSetRenderTargets(config.rt, config.ds, &config.scissor);
-
-	// Clear render target if it's in cleared state (prevents ghosting)
-	if (config.rt && config.rt->GetState() == GSTexture::State::Cleared)
+	// Render directly to backbuffer for RTX Remix compatibility
+	// RTX Remix needs draws to go to the primary render target to raytrace them
+	IDirect3DSurface9* backbuffer = nullptr;
+	m_dev->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &backbuffer);
+	if (backbuffer)
 	{
-		u32 clear_color = config.rt->GetClearColor();
-		m_dev->Clear(0, nullptr, D3DCLEAR_TARGET, clear_color, 1.0f, 0);
-		config.rt->SetState(GSTexture::State::Dirty);
+		m_dev->SetRenderTarget(0, backbuffer);
+		backbuffer->Release();
 	}
+	
+	// Set viewport to window size
+	D3DVIEWPORT9 vp = {};
+	vp.Width = m_window_info.surface_width;
+	vp.Height = m_window_info.surface_height;
+	vp.MaxZ = 1.0f;
+	m_dev->SetViewport(&vp);
 
 
 	// Set texture if available
@@ -543,12 +588,23 @@ void GSDevice9::RenderHW(GSHWDrawConfig& config)
 	}
 
 	// Fixed function pipeline setup
+	// Lighting disabled - vertex format has normals for RTX Remix to use
 	m_dev->SetRenderState(D3DRS_LIGHTING, FALSE);
 	m_dev->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
-	
-	// Always use our default depth buffer for proper depth sorting
-	if (m_default_ds)
-		m_dev->SetDepthStencilSurface(m_default_ds);
+	m_dev->SetRenderState(D3DRS_CLIPPING, FALSE);  // Disable frustum clipping
+
+	// Setup directional light for RTX Remix to detect (even though D3D9 lighting is off)
+	D3DLIGHT9 light = {};
+	light.Type = D3DLIGHT_DIRECTIONAL;
+	light.Diffuse.r = 2.0f;
+	light.Diffuse.g = 1.9f;
+	light.Diffuse.b = 1.7f;
+	light.Diffuse.a = 1.0f;
+	light.Direction.x = 0.5f;
+	light.Direction.y = -0.7f;
+	light.Direction.z = 0.5f;
+	m_dev->SetLight(0, &light);
+	m_dev->LightEnable(0, TRUE);
 
 	// Enable depth testing but respect game's depth write setting
 	// Skyboxes typically have depth write disabled (zwe=0)
@@ -584,56 +640,115 @@ void GSDevice9::RenderHW(GSHWDrawConfig& config)
 	}
 
 	// Get render target size for coordinate transformation
-	const int rt_width = config.rt ? config.rt->GetWidth() : m_window_info.surface_width;
-	const int rt_height = config.rt ? config.rt->GetHeight() : m_window_info.surface_height;
+	// Use window size since we're rendering directly to backbuffer
+	const int rt_width = m_window_info.surface_width;
+	const int rt_height = m_window_info.surface_height;
 
-	// Convert GSVertex to pretransformed D3D9 vertices
+	// Create/update depth buffer to match RT size
+	if (m_rt_ds_width != (u32)rt_width || m_rt_ds_height != (u32)rt_height)
+	{
+		if (m_rt_ds)
+		{
+			m_rt_ds->Release();
+			m_rt_ds = nullptr;
+		}
+		if (SUCCEEDED(m_dev->CreateDepthStencilSurface(rt_width, rt_height, D3DFMT_D24S8, D3DMULTISAMPLE_NONE, 0, FALSE, &m_rt_ds, nullptr)))
+		{
+			m_rt_ds_width = rt_width;
+			m_rt_ds_height = rt_height;
+		}
+	}
+	
+	// Use our RT-matched depth buffer
+	if (m_rt_ds)
+	{
+		m_dev->SetDepthStencilSurface(m_rt_ds);
+		// Clear depth buffer each frame for proper depth sorting
+		m_dev->Clear(0, nullptr, D3DCLEAR_ZBUFFER, 0, 1.0f, 0);
+	}
+
+	// Camera distance - geometry is placed at this Z depth
+	const float camDist = 500.0f;
+
+	// Set up transformation matrices for D3D9 and RTX Remix camera detection
+	// World matrix is identity
+	D3DMATRIX world = {
+		1, 0, 0, 0,
+		0, 1, 0, 0,
+		0, 0, 1, 0,
+		0, 0, 0, 1
+	};
+	m_dev->SetTransform(D3DTS_WORLD, &world);
+
+	// Camera at origin looking down +Z
+	D3DMATRIX view = {
+		1, 0, 0, 0,
+		0, 1, 0, 0,
+		0, 0, 1, 0,
+		0, 0, 0, 1
+	};
+	m_dev->SetTransform(D3DTS_VIEW, &view);
+
+	// Perspective projection
+	// FOV chosen so that at z=camDist, the view covers rt_width x rt_height
+	float fovY = 2.0f * atanf((rt_height * 0.5f) / camDist);
+	float aspect = (float)rt_width / (float)rt_height;
+	float zn = 1.0f, zf = 10000.0f;
+	float yScale = 1.0f / tanf(fovY * 0.5f);
+	float xScale = yScale / aspect;
+	D3DMATRIX proj = {
+		xScale, 0, 0, 0,
+		0, yScale, 0, 0,
+		0, 0, zf / (zf - zn), 1,
+		0, 0, -zn * zf / (zf - zn), 0
+	};
+	m_dev->SetTransform(D3DTS_PROJECTION, &proj);
+
+	// Store camDist for vertex transform
+	const float vertexZ = camDist;
+
+	// Convert GSVertex to D3D9 vertices
 	const GSVertex* src = config.verts;
 	const u32 nverts = config.nverts;
 
 	std::vector<GSVertexDX9> transformed(nverts);
 
 	// PS2 GS coordinates to D3D9 screen coordinates
-	// From the Metal shader (tfx.metal line 176):
-	//   out.p.xy = pos.xy * float2(scale.x, -scale.y) - float2(offset.x, -offset.y)
-	// So: ndc_x = pos.x * scale.x - offset.x
-	//     ndc_y = pos.y * (-scale.y) + offset.y
 	const float sx = config.cb_vs.vertex_scale.x;
 	const float sy = config.cb_vs.vertex_scale.y;
 	const float ox = config.cb_vs.vertex_offset.x;
 	const float oy = config.cb_vs.vertex_offset.y;
 
+	// First pass: compute positions
 	for (u32 i = 0; i < nverts; i++)
 	{
 		const GSVertex& v = src[i];
 		GSVertexDX9& d = transformed[i];
 
 		// XYZ.X/Y are raw fixed-point values (4 fractional bits)
-		// The scale already accounts for this (sx = 2.0 / (width << 4))
-		// So we pass the raw integer value, not divided by 16
 		float x = static_cast<float>(v.XYZ.X);
 		float y = static_cast<float>(v.XYZ.Y);
 		
-		// Z is 32-bit - PS2 uses larger Z for closer objects (reversed depth)
-		// Invert so larger PS2 Z becomes smaller D3D Z (closer to camera)
+		// Z is 32-bit - invert for D3D (smaller = closer)
 		float z = 1.0f - static_cast<float>(static_cast<double>(v.XYZ.Z) / static_cast<double>(0xFFFFFFFFu));
 
-		// Transform to NDC (matching the real shader: pos * scale - offset)
-		// Note: Y scale is negated in the shader
+		// Transform to NDC
 		float ndc_x = x * sx - ox;
 		float ndc_y = y * (-sy) + oy;
 
-		// NDC [-1,1] to screen [0, size]
-		// D3D9 RHW needs the -0.5 texel offset
-		// D3D9 has Y=0 at top, so flip: (1 - ndc_y) instead of (ndc_y + 1)
-		d.x = (ndc_x + 1.0f) * 0.5f * rt_width - 0.5f;
-		d.y = (1.0f - ndc_y) * 0.5f * rt_height - 0.5f;
-		d.z = z;
-		d.rhw = 1.0f;
+		// World-space coords centered at origin, pushed forward for perspective camera
+		// Camera is at origin looking down +Z, geometry placed at camDist
+		d.x = ndc_x * (rt_width * 0.5f);   // Center around origin
+		d.y = -ndc_y * (rt_height * 0.5f); // Flip Y, center around origin
+		d.z = vertexZ + (z * 100.0f);       // Push forward + depth offset
 
-		// Color from RGBAQ
-		// D3DCOLOR is ARGB format (0xAARRGGBB)
-		d.color = D3DCOLOR_ARGB(255, v.RGBAQ.R, v.RGBAQ.G, v.RGBAQ.B);
+		// Initialize normal to 0 (will be computed per-triangle)
+		d.nx = 0.0f;
+		d.ny = 0.0f;
+		d.nz = -1.0f;  // Default facing camera
+
+		// Color from RGBAQ (D3DCOLOR is ARGB)
+		d.color = D3DCOLOR_ARGB(v.RGBAQ.A, v.RGBAQ.R, v.RGBAQ.G, v.RGBAQ.B);
 
 		// Texture coordinates
 		if (config.tex)
@@ -645,6 +760,60 @@ void GSDevice9::RenderHW(GSHWDrawConfig& config)
 		{
 			d.u = 0.0f;
 			d.v = 0.0f;
+		}
+	}
+
+	// Second pass: compute normals from triangles (for lighting)
+	if (config.topology == GSHWDrawConfig::Topology::Triangle)
+	{
+		if (config.indices && config.nindices > 0)
+		{
+			// Indexed triangles
+			for (u32 i = 0; i + 2 < config.nindices; i += 3)
+			{
+				u32 i0 = config.indices[i];
+				u32 i1 = config.indices[i + 1];
+				u32 i2 = config.indices[i + 2];
+				
+				GSVertexDX9& v0 = transformed[i0];
+				GSVertexDX9& v1 = transformed[i1];
+				GSVertexDX9& v2 = transformed[i2];
+
+				// Compute triangle edges
+				float e1x = v1.x - v0.x, e1y = v1.y - v0.y, e1z = v1.z - v0.z;
+				float e2x = v2.x - v0.x, e2y = v2.y - v0.y, e2z = v2.z - v0.z;
+
+				// Cross product for face normal
+				float nx = e1y * e2z - e1z * e2y;
+				float ny = e1z * e2x - e1x * e2z;
+				float nz = e1x * e2y - e1y * e2x;
+
+				// Accumulate to vertex normals (will be normalized by D3D9)
+				v0.nx += nx; v0.ny += ny; v0.nz += nz;
+				v1.nx += nx; v1.ny += ny; v1.nz += nz;
+				v2.nx += nx; v2.ny += ny; v2.nz += nz;
+			}
+		}
+		else
+		{
+			// Non-indexed triangles
+			for (u32 i = 0; i + 2 < nverts; i += 3)
+			{
+				GSVertexDX9& v0 = transformed[i];
+				GSVertexDX9& v1 = transformed[i + 1];
+				GSVertexDX9& v2 = transformed[i + 2];
+
+				float e1x = v1.x - v0.x, e1y = v1.y - v0.y, e1z = v1.z - v0.z;
+				float e2x = v2.x - v0.x, e2y = v2.y - v0.y, e2z = v2.z - v0.z;
+
+				float nx = e1y * e2z - e1z * e2y;
+				float ny = e1z * e2x - e1x * e2z;
+				float nz = e1x * e2y - e1y * e2x;
+
+				v0.nx = nx; v0.ny = ny; v0.nz = nz;
+				v1.nx = nx; v1.ny = ny; v1.nz = nz;
+				v2.nx = nx; v2.ny = ny; v2.nz = nz;
+			}
 		}
 	}
 

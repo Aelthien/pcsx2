@@ -12,17 +12,18 @@
 #include <unordered_map>
 #include <string_view>
 
-// Vertex format for hardware rendering
+// Vertex format for hardware rendering with lighting support
 #pragma pack(push, 1)
 struct GSVertexDX9
 {
-	float x, y, z, rhw; // Position (pre-transformed)
+	float x, y, z;      // Position (world space - will be transformed by matrices)
+	float nx, ny, nz;   // Normal for lighting
 	DWORD color;        // Diffuse color (ARGB)
 	float u, v;         // Texture coordinates
 };
 #pragma pack(pop)
 
-#define GSVERTEXDX9_FVF (D3DFVF_XYZRHW | D3DFVF_DIFFUSE | D3DFVF_TEX1)
+#define GSVERTEXDX9_FVF (D3DFVF_XYZ | D3DFVF_NORMAL | D3DFVF_DIFFUSE | D3DFVF_TEX1)
 
 // Simple vertex for present/convert operations
 struct GSVertexPT1DX9
@@ -94,8 +95,13 @@ private:
 		IDirect3DPixelShader9* ps[static_cast<int>(PresentShader::Count)];
 	} m_present = {};
 
-	// Default depth buffer for rendering
+	// Default depth buffer for rendering (backbuffer size)
 	IDirect3DSurface9* m_default_ds = nullptr;
+	
+	// Dynamic depth buffer that matches current RT size
+	IDirect3DSurface9* m_rt_ds = nullptr;
+	u32 m_rt_ds_width = 0;
+	u32 m_rt_ds_height = 0;
 
 	// Cached states
 	std::unordered_map<u32, IDirect3DPixelShader9*> m_ps_cache;

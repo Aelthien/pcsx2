@@ -379,6 +379,7 @@
     <ClCompile Include="GS\GSVector.cpp" />
     <ClCompile Include="GS\Renderers\Common\GSVertexTrace.cpp" />
     <ClCompile Include="GS\Renderers\Common\GSVertexTraceFMM.cpp" />
+    <ClCompile Include="GS\Renderers\Common\RemixConfig.cpp" />
     <ClCompile Include="GS\GSXXH.cpp" />
     <ClCompile Include="GS\MultiISA.cpp" />
     <ClCompile Include="StateWrapper.cpp" />
@@ -827,6 +828,7 @@
     <ClInclude Include="GS\Renderers\HW\GSVertexHW.h" />
     <ClInclude Include="GS\Renderers\SW\GSVertexSW.h" />
     <ClInclude Include="GS\Renderers\Common\GSVertexTrace.h" />
+    <ClInclude Include="GS\Renderers\Common\RemixConfig.h" />
     <ClInclude Include="GS\GSXXH.h" />
     <ClInclude Include="GS\MultiISA.h" />
     <ClInclude Include="IPU\IPUdma.h" />
