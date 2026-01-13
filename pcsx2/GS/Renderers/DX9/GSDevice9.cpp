@@ -586,7 +586,7 @@ void GSDevice9::RenderHW(GSHWDrawConfig& config)
 			bb->Release();
 		}
 		m_dev->SetDepthStencilSurface(m_default_ds);
-		m_dev->Clear(0, nullptr, D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER, D3DCOLOR_ARGB(0, 0, 0, 0), 1.0f, 0);
+		m_dev->Clear(0, nullptr, D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER, D3DCOLOR_ARGB(255, 0, 0, 0), 1.0f, 0);
 	}
 
 	// Render directly to backbuffer for RTX Remix compatibility
@@ -610,7 +610,7 @@ void GSDevice9::RenderHW(GSHWDrawConfig& config)
 	m_dev->SetViewport(&vp);
 
 
-	// Set texture if available
+	// Set texture if available, otherwise clear it
 	if (config.tex)
 	{
 		GSTexture9* tex9 = static_cast<GSTexture9*>(config.tex);
@@ -624,12 +624,15 @@ void GSDevice9::RenderHW(GSHWDrawConfig& config)
 			m_dev->SetSamplerState(0, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
 		}
 	}
+	else
+	{
+		m_dev->SetTexture(0, nullptr);
+	}
 
 	// Fixed function pipeline setup
 	// Lighting disabled - vertex format has normals for RTX Remix to use
 	m_dev->SetRenderState(D3DRS_LIGHTING, FALSE);
 	m_dev->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
-	m_dev->SetRenderState(D3DRS_CLIPPING, FALSE);  // Disable frustum clipping
 
 	// Setup directional light for RTX Remix to detect (even though D3D9 lighting is off)
 	D3DLIGHT9 light = {};
