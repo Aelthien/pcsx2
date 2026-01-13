@@ -90,7 +90,8 @@ bool GSDevice9::CreateDevice()
 	m_pp.BackBufferWidth = m_window_info.surface_width;
 	m_pp.BackBufferHeight = m_window_info.surface_height;
 	m_pp.BackBufferFormat = D3DFMT_X8R8G8B8;
-	m_pp.SwapEffect = D3DSWAPEFFECT_DISCARD;
+	m_pp.BackBufferCount = 1;
+	m_pp.SwapEffect = D3DSWAPEFFECT_COPY;
 	m_pp.hDeviceWindow = reinterpret_cast<HWND>(m_window_info.window_handle);
 	m_pp.Windowed = TRUE;
 	m_pp.PresentationInterval = (m_vsync_mode == GSVSyncMode::FIFO) ? D3DPRESENT_INTERVAL_ONE : D3DPRESENT_INTERVAL_IMMEDIATE;
@@ -329,6 +330,9 @@ void GSDevice9::DrawStretchRect(const GSVector4& sRect, const GSVector4& dRect, 
 void GSDevice9::DoStretchRect(GSTexture* sTex, const GSVector4& sRect, GSTexture* dTex, const GSVector4& dRect,
 	GSHWDrawConfig::ColorMaskSelector cms, ShaderConvert shader, bool linear)
 {
+	// Skip offscreen RT operations - we render directly to backbuffer for RTX Remix
+	return;
+
 	if (!sTex || !dTex || !m_dev)
 		return;
 
@@ -381,6 +385,9 @@ void GSDevice9::DoStretchRect(GSTexture* sTex, const GSVector4& sRect, GSTexture
 void GSDevice9::DoMerge(GSTexture* sTex[3], GSVector4* sRect, GSTexture* dTex, GSVector4* dRect,
 	const GSRegPMODE& PMODE, const GSRegEXTBUF& EXTBUF, u32 c, const bool linear)
 {
+	// Skip merge - we render directly to backbuffer for RTX Remix
+	return;
+
 	if (!dTex || !m_dev)
 		return;
 
@@ -439,11 +446,8 @@ void GSDevice9::DoMerge(GSTexture* sTex[3], GSVector4* sRect, GSTexture* dTex, G
 void GSDevice9::DoInterlace(GSTexture* sTex, const GSVector4& sRect, GSTexture* dTex, const GSVector4& dRect,
 	ShaderInterlace shader, bool linear, const InterlaceConstantBuffer& cb)
 {
-	// Simple pass-through for now - just copy
-	if (!sTex || !dTex || !m_dev)
-		return;
-
-	DoStretchRect(sTex, sRect, dTex, dRect, GSHWDrawConfig::ColorMaskSelector(), ShaderConvert::COPY, linear);
+	// Skip interlace - we render directly to backbuffer for RTX Remix
+	return;
 }
 
 void GSDevice9::DoFXAA(GSTexture* sTex, GSTexture* dTex)
@@ -465,6 +469,14 @@ void GSDevice9::PresentRect(GSTexture* sTex, const GSVector4& sRect, GSTexture* 
 	PresentShader shader, float shaderTime, bool linear)
 {
 	if (!m_dev)
+		return;
+
+	// For RTX Remix: ALWAYS skip presenting to the backbuffer
+	// We render geometry directly to backbuffer in RenderHW, so PresentRect would
+	// overwrite our 3D geometry with a 2D textured quad (which Remix can't raytrace)
+	// The PS2 uses interlaced rendering, so RenderHW is only called every other frame,
+	// but we still want to skip PresentRect on all frames to avoid flickering
+	if (!dTex)
 		return;
 
 	// Get destination surface
@@ -554,6 +566,29 @@ void GSDevice9::RenderHW(GSHWDrawConfig& config)
 	if (!config.verts || config.nverts == 0 || !m_dev)
 		return;
 
+	// D3D9 requires draw calls between BeginScene/EndScene
+	// RenderHW is called before BeginPresent, so we need to start a scene here
+	if (!m_in_scene)
+	{
+		if (FAILED(m_dev->BeginScene()))
+			return;
+		m_in_scene = true;
+	}
+
+	// Clear at start of RenderHW to prevent overlapping, but only once per frame
+	// This is better than clearing in BeginPresent because RenderHW isn't called every frame (interlacing)
+	if (!m_rendered_to_backbuffer)
+	{
+		IDirect3DSurface9* bb = nullptr;
+		if (SUCCEEDED(m_dev->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &bb)))
+		{
+			m_dev->SetRenderTarget(0, bb);
+			bb->Release();
+		}
+		m_dev->SetDepthStencilSurface(m_default_ds);
+		m_dev->Clear(0, nullptr, D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER, D3DCOLOR_ARGB(0, 0, 0, 0), 1.0f, 0);
+	}
+
 	// Render directly to backbuffer for RTX Remix compatibility
 	// RTX Remix needs draws to go to the primary render target to raytrace them
 	IDirect3DSurface9* backbuffer = nullptr;
@@ -563,6 +598,9 @@ void GSDevice9::RenderHW(GSHWDrawConfig& config)
 		m_dev->SetRenderTarget(0, backbuffer);
 		backbuffer->Release();
 	}
+	
+	// Mark that we've rendered directly to backbuffer
+	m_rendered_to_backbuffer = true;
 	
 	// Set viewport to window size
 	D3DVIEWPORT9 vp = {};
@@ -644,28 +682,8 @@ void GSDevice9::RenderHW(GSHWDrawConfig& config)
 	const int rt_width = m_window_info.surface_width;
 	const int rt_height = m_window_info.surface_height;
 
-	// Create/update depth buffer to match RT size
-	if (m_rt_ds_width != (u32)rt_width || m_rt_ds_height != (u32)rt_height)
-	{
-		if (m_rt_ds)
-		{
-			m_rt_ds->Release();
-			m_rt_ds = nullptr;
-		}
-		if (SUCCEEDED(m_dev->CreateDepthStencilSurface(rt_width, rt_height, D3DFMT_D24S8, D3DMULTISAMPLE_NONE, 0, FALSE, &m_rt_ds, nullptr)))
-		{
-			m_rt_ds_width = rt_width;
-			m_rt_ds_height = rt_height;
-		}
-	}
-	
-	// Use our RT-matched depth buffer
-	if (m_rt_ds)
-	{
-		m_dev->SetDepthStencilSurface(m_rt_ds);
-		// Clear depth buffer each frame for proper depth sorting
-		m_dev->Clear(0, nullptr, D3DCLEAR_ZBUFFER, 0, 1.0f, 0);
-	}
+	// Use default depth buffer
+	m_dev->SetDepthStencilSurface(m_default_ds);
 
 	// Camera distance - geometry is placed at this Z depth
 	const float camDist = 500.0f;
@@ -1003,31 +1021,21 @@ void GSDevice9::PSSetSamplerState(int i, PSSamplerSelector sel)
 
 void GSDevice9::OMSetRenderTargets(GSTexture* rt, GSTexture* ds, const GSVector4i* scissor)
 {
-	GSTexture9* rt9 = static_cast<GSTexture9*>(rt);
-	GSTexture9* ds9 = static_cast<GSTexture9*>(ds);
-
-	IDirect3DSurface9* rt_surface = rt9 ? rt9->GetSurface() : nullptr;
-	IDirect3DSurface9* ds_surface = ds9 ? ds9->GetSurface() : nullptr;
-
-	if (m_state.rt != rt_surface)
+	// For RTX Remix: always render to backbuffer, ignore the passed RT
+	// This ensures all geometry goes to the primary render target
+	IDirect3DSurface9* backbuffer = nullptr;
+	m_dev->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &backbuffer);
+	if (backbuffer)
 	{
-		m_state.rt = rt_surface;
-		m_dev->SetRenderTarget(0, rt_surface);
+		m_dev->SetRenderTarget(0, backbuffer);
+		backbuffer->Release();
 	}
-
-	if (m_state.ds != ds_surface)
-	{
-		m_state.ds = ds_surface;
-		m_dev->SetDepthStencilSurface(ds_surface);
-	}
-
-	if (scissor)
-	{
-		RECT rc = {scissor->x, scissor->y, scissor->z, scissor->w};
-		m_state.scissor = rc;
-		m_dev->SetScissorRect(&rc);
-		m_dev->SetRenderState(D3DRS_SCISSORTESTENABLE, TRUE);
-	}
+	
+	// Use default depth buffer
+	m_dev->SetDepthStencilSurface(m_default_ds);
+	
+	// Disable scissor test - we're rendering to full backbuffer
+	m_dev->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE);
 }
 
 void GSDevice9::SetupVS(VSSelector sel, const GSHWDrawConfig::VSConstantBuffer* cb)
@@ -1102,11 +1110,17 @@ GSDevice::PresentResult GSDevice9::BeginPresent(bool frame_skip)
 	backbuffer->Release();
 
 	// BeginScene is required for D3D9 rendering
-	if (FAILED(m_dev->BeginScene()))
-		return PresentResult::FrameSkipped;
+	// Skip if RenderHW already started a scene
+	if (!m_in_scene)
+	{
+		if (FAILED(m_dev->BeginScene()))
+			return PresentResult::FrameSkipped;
+		m_in_scene = true;
+	}
 
-	// Clear both color and depth buffer - dark orange background
-	m_dev->Clear(0, nullptr, D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER, D3DCOLOR_ARGB(255, 139, 69, 19), 1.0f, 0);
+	// Only clear if we rendered this frame - otherwise we'd flicker
+	// (PS2 uses interlacing so RenderHW is only called every other frame)
+	// Don't clear here - clear at start of RenderHW instead
 
 	// Set viewport
 	D3DVIEWPORT9 vp = {};
@@ -1124,9 +1138,23 @@ void GSDevice9::EndPresent()
 
 	if (m_dev)
 	{
-		m_dev->EndScene();
-		m_dev->Present(nullptr, nullptr, nullptr, nullptr);
+		if (m_in_scene)
+		{
+			m_dev->EndScene();
+			m_in_scene = false;
+		}
+		
+		// Only present if we actually rendered geometry this frame
+		// PS2 uses interlacing so RenderHW is only called every other frame
+		// Presenting on non-render frames causes flickering with RTX Remix
+		if (m_rendered_to_backbuffer)
+		{
+			m_dev->Present(nullptr, nullptr, nullptr, nullptr);
+		}
 	}
+
+	// Reset frame flags for next frame
+	m_rendered_to_backbuffer = false;
 }
 
 void GSDevice9::RenderImGui()

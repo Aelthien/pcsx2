@@ -102,6 +102,10 @@ private:
 	IDirect3DSurface9* m_rt_ds = nullptr;
 	u32 m_rt_ds_width = 0;
 	u32 m_rt_ds_height = 0;
+	
+	// Track if we've rendered directly to backbuffer this frame (for RTX Remix)
+	bool m_rendered_to_backbuffer = false;
+	bool m_in_scene = false;
 
 	// Cached states
 	std::unordered_map<u32, IDirect3DPixelShader9*> m_ps_cache;
