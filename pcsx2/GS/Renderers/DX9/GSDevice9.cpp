@@ -566,6 +566,24 @@ void GSDevice9::RenderHW(GSHWDrawConfig& config)
 	if (!config.verts || config.nverts == 0 || !m_dev)
 		return;
 
+	// Debug: track texture usage
+	static int frame_count = 0;
+	static int tex_null_count = 0;
+	static int tex_valid_count = 0;
+	static int d3dtex_null_count = 0;
+	frame_count++;
+	if (config.tex)
+	{
+		tex_valid_count++;
+		GSTexture9* tex9 = static_cast<GSTexture9*>(config.tex);
+		if (!tex9->GetTexture())
+			d3dtex_null_count++;
+	}
+	else
+		tex_null_count++;
+	if (frame_count % 1000 == 0)
+		printf("DX9: frames=%d tex_valid=%d tex_null=%d d3dtex_null=%d\n", frame_count, tex_valid_count, tex_null_count, d3dtex_null_count);
+
 	// D3D9 requires draw calls between BeginScene/EndScene
 	// RenderHW is called before BeginPresent, so we need to start a scene here
 	if (!m_in_scene)
@@ -623,6 +641,12 @@ void GSDevice9::RenderHW(GSHWDrawConfig& config)
 			m_dev->SetSamplerState(0, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
 			m_dev->SetSamplerState(0, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
 		}
+		else
+		{
+			// Texture object exists but D3D texture is null - this shouldn't happen
+			printf("DX9: config.tex exists but GetTexture() returned null! Type=%d\n", (int)tex9->GetType());
+			m_dev->SetTexture(0, nullptr);
+		}
 	}
 	else
 	{
@@ -630,22 +654,52 @@ void GSDevice9::RenderHW(GSHWDrawConfig& config)
 	}
 
 	// Fixed function pipeline setup
-	// Lighting disabled - vertex format has normals for RTX Remix to use
-	m_dev->SetRenderState(D3DRS_LIGHTING, FALSE);
 	m_dev->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
 
-	// Setup directional light for RTX Remix to detect (even though D3D9 lighting is off)
+	// Disable D3D9 lighting - it overrides vertex colors and breaks texture display
+	// RTX Remix will use its own lighting system
+	m_dev->SetRenderState(D3DRS_LIGHTING, FALSE);
+
+	// Set material with high specular for RTX Remix
+	D3DMATERIAL9 mtrl = {};
+	mtrl.Diffuse.r = 1.0f;
+	mtrl.Diffuse.g = 1.0f;
+	mtrl.Diffuse.b = 1.0f;
+	mtrl.Diffuse.a = 1.0f;
+	mtrl.Ambient.r = 0.2f;
+	mtrl.Ambient.g = 0.2f;
+	mtrl.Ambient.b = 0.2f;
+	mtrl.Ambient.a = 1.0f;
+	mtrl.Specular.r = 1.0f;
+	mtrl.Specular.g = 1.0f;
+	mtrl.Specular.b = 1.0f;
+	mtrl.Specular.a = 1.0f;
+	mtrl.Power = 50.0f;  // Specular power/sharpness
+	m_dev->SetMaterial(&mtrl);
+
+	// Setup directional light for RTX Remix to detect
 	D3DLIGHT9 light = {};
 	light.Type = D3DLIGHT_DIRECTIONAL;
 	light.Diffuse.r = 2.0f;
 	light.Diffuse.g = 1.9f;
 	light.Diffuse.b = 1.7f;
 	light.Diffuse.a = 1.0f;
+	light.Specular.r = 1.0f;
+	light.Specular.g = 1.0f;
+	light.Specular.b = 1.0f;
+	light.Specular.a = 1.0f;
+	light.Ambient.r = 0.3f;
+	light.Ambient.g = 0.3f;
+	light.Ambient.b = 0.3f;
+	light.Ambient.a = 1.0f;
 	light.Direction.x = 0.5f;
 	light.Direction.y = -0.7f;
 	light.Direction.z = 0.5f;
 	m_dev->SetLight(0, &light);
 	m_dev->LightEnable(0, TRUE);
+
+	// Set ambient light
+	m_dev->SetRenderState(D3DRS_AMBIENT, D3DCOLOR_XRGB(80, 80, 80));
 
 	// Enable depth testing but respect game's depth write setting
 	// Skyboxes typically have depth write disabled (zwe=0)
@@ -760,7 +814,7 @@ void GSDevice9::RenderHW(GSHWDrawConfig& config)
 		// World-space coords centered at origin, pushed forward for perspective camera
 		// Camera is at origin looking down +Z, geometry placed at camDist
 		d.x = ndc_x * (rt_width * 0.5f);   // Center around origin
-		d.y = -ndc_y * (rt_height * 0.5f); // Flip Y, center around origin
+		d.y = ndc_y * (rt_height * 0.5f);  // Y already flipped by -sy above
 		d.z = vertexZ + (z * 100.0f);       // Push forward + depth offset
 
 		// Initialize normal to 0 (will be computed per-triangle)
@@ -772,10 +826,19 @@ void GSDevice9::RenderHW(GSHWDrawConfig& config)
 		d.color = D3DCOLOR_ARGB(v.RGBAQ.A, v.RGBAQ.R, v.RGBAQ.G, v.RGBAQ.B);
 
 		// Texture coordinates
+		// PS2 uses fixed-point UVs with 4 fractional bits, so divide by 16
+		// Then normalize to [0,1] range by dividing by texture dimensions
 		if (config.tex)
 		{
-			d.u = static_cast<float>(v.U) / 16.0f / config.tex->GetWidth();
-			d.v = static_cast<float>(v.V) / 16.0f / config.tex->GetHeight();
+			const float tex_w = static_cast<float>(config.tex->GetWidth());
+			const float tex_h = static_cast<float>(config.tex->GetHeight());
+			d.u = (static_cast<float>(v.U) / 16.0f) / tex_w;
+			d.v = (static_cast<float>(v.V) / 16.0f) / tex_h;
+			
+			// Debug: print first vertex UV info once per 10000 draws
+			static int uv_debug_count = 0;
+			if (i == 0 && (uv_debug_count++ % 10000) == 0)
+				printf("UV: raw=%d,%d tex=%dx%d final=%.4f,%.4f\n", v.U, v.V, (int)tex_w, (int)tex_h, d.u, d.v);
 		}
 		else
 		{
