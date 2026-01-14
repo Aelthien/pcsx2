@@ -1,0 +1,22 @@
+name: Build
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+
+jobs:
+  build-windows:
+    name: Windows Build
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build Release
+        run: msbuild PCSX2_qt.sln /m /v:m /p:Configuration=Release /p:Platform=x64
