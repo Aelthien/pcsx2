@@ -43,6 +43,19 @@ jobs:
       - name: Build Release
         run: msbuild PCSX2_qt.sln /m /v:m /p:Configuration=Release /p:Platform=x64
 
+      - name: Download RTX Remix Runtime
+        shell: pwsh
+        run: |
+          # Get latest RTX Remix release
+          $release = Invoke-RestMethod -Uri "https://api.github.com/repos/NVIDIAGameWorks/rtx-remix/releases/latest"
+          $asset = $release.assets | Where-Object { $_.name -like "*runtime*.zip" } | Select-Object -First 1
+          if (-not $asset) {
+            $asset = $release.assets | Where-Object { $_.name -like "*.zip" } | Select-Object -First 1
+          }
+          Write-Host "Downloading $($asset.name)..."
+          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile "remix-runtime.zip"
+          Expand-Archive -Path "remix-runtime.zip" -DestinationPath "remix-runtime"
+
       - name: Prepare Release Package
         shell: pwsh
         run: |
@@ -50,9 +63,9 @@ jobs:
           $outDir = "PCSX2-RTX-Remix-$tag"
           New-Item -ItemType Directory -Path $outDir -Force
           
-          # Copy main executable
-          Copy-Item "bin/x64/Release/*.exe" $outDir/
-          Copy-Item "bin/x64/Release/*.dll" $outDir/ -ErrorAction SilentlyContinue
+          # Copy executables and DLLs from bin
+          Copy-Item "bin/*.exe" $outDir/
+          Copy-Item "bin/*.dll" $outDir/ -ErrorAction SilentlyContinue
           
           # Copy deps DLLs
           Copy-Item "deps/bin/*.dll" $outDir/
@@ -62,6 +75,12 @@ jobs:
           
           # Copy RTX config
           Copy-Item "bin/rtx.conf" $outDir/ -ErrorAction SilentlyContinue
+          
+          # Copy RTX Remix runtime files
+          $remixDir = Get-ChildItem -Path "remix-runtime" -Directory | Select-Object -First 1
+          if ($remixDir) {
+            Copy-Item -Path "$($remixDir.FullName)/*" -Destination $outDir/ -Recurse -Force
+          }
           
           # Create archive
           7z a "$outDir.7z" $outDir
