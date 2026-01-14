@@ -15,6 +15,21 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Cache Dependencies
+        id: cache-deps
+        uses: actions/cache@v4
+        with:
+          path: deps
+          key: deps-${{ hashFiles('.github/workflows/scripts/windows/build-dependencies.bat') }}
+
+      - name: Build Dependencies
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        shell: cmd
+        run: |
+          call .github\workflows\scripts\windows\build-dependencies.bat
+        env:
+          DEBUG: 0
+
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
 
