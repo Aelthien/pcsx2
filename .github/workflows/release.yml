@@ -77,6 +77,10 @@ jobs:
           # Copy resources
           Copy-Item -Recurse "bin/resources" $outDir/
           
+          # Copy Qt plugins and config
+          Copy-Item -Recurse "bin/QtPlugins" $outDir/ -ErrorAction SilentlyContinue
+          Copy-Item "bin/qt.conf" $outDir/ -ErrorAction SilentlyContinue
+          
           # Copy RTX config
           Copy-Item "bin/rtx.conf" $outDir/ -ErrorAction SilentlyContinue
           
