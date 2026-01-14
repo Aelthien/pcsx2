@@ -48,13 +48,17 @@ jobs:
         run: |
           # Get latest RTX Remix release
           $release = Invoke-RestMethod -Uri "https://api.github.com/repos/NVIDIAGameWorks/rtx-remix/releases/latest"
-          $asset = $release.assets | Where-Object { $_.name -like "*runtime*.zip" } | Select-Object -First 1
+          # Get the release zip (not debug, not symbols)
+          $asset = $release.assets | Where-Object { $_.name -match "^remix-.*-release\.zip$" } | Select-Object -First 1
           if (-not $asset) {
-            $asset = $release.assets | Where-Object { $_.name -like "*.zip" } | Select-Object -First 1
+            Write-Error "Could not find RTX Remix release asset"
+            exit 1
           }
           Write-Host "Downloading $($asset.name)..."
           Invoke-WebRequest -Uri $asset.browser_download_url -OutFile "remix-runtime.zip"
           Expand-Archive -Path "remix-runtime.zip" -DestinationPath "remix-runtime"
+          Write-Host "Contents:"
+          Get-ChildItem -Path "remix-runtime" -Recurse -Depth 2 | Select-Object FullName
 
       - name: Prepare Release Package
         shell: pwsh
