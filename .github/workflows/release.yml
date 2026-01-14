@@ -1,0 +1,102 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g. v1.0.0)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build Release
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Cache Dependencies
+        id: cache-deps
+        uses: actions/cache@v4
+        with:
+          path: deps
+          key: deps-${{ hashFiles('.github/workflows/scripts/windows/build-dependencies.bat') }}
+
+      - name: Build Dependencies
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        shell: cmd
+        run: |
+          call .github\workflows\scripts\windows\build-dependencies.bat
+        env:
+          DEBUG: 0
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build Release
+        run: msbuild PCSX2_qt.sln /m /v:m /p:Configuration=Release /p:Platform=x64
+
+      - name: Prepare Release Package
+        shell: pwsh
+        run: |
+          $tag = if ("${{ github.event.inputs.tag }}") { "${{ github.event.inputs.tag }}" } else { "${{ github.ref_name }}" }
+          $outDir = "PCSX2-RTX-Remix-$tag"
+          New-Item -ItemType Directory -Path $outDir -Force
+          
+          # Copy main executable
+          Copy-Item "bin/x64/Release/*.exe" $outDir/
+          Copy-Item "bin/x64/Release/*.dll" $outDir/ -ErrorAction SilentlyContinue
+          
+          # Copy deps DLLs
+          Copy-Item "deps/bin/*.dll" $outDir/
+          
+          # Copy resources
+          Copy-Item -Recurse "bin/resources" $outDir/
+          
+          # Copy RTX config
+          Copy-Item "bin/rtx.conf" $outDir/ -ErrorAction SilentlyContinue
+          
+          # Create archive
+          7z a "$outDir.7z" $outDir
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PCSX2-RTX-Remix
+          path: PCSX2-RTX-Remix-*.7z
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: PCSX2-RTX-Remix
+
+      - name: Get Tag
+        id: get_tag
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.get_tag.outputs.tag }}
+          name: ${{ steps.get_tag.outputs.tag }}
+          files: PCSX2-RTX-Remix-*.7z
+          draft: false
+          prerelease: ${{ contains(steps.get_tag.outputs.tag, 'alpha') || contains(steps.get_tag.outputs.tag, 'beta') || contains(steps.get_tag.outputs.tag, 'rc') }}
+          generate_release_notes: true
