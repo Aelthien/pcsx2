@@ -2,11 +2,13 @@
 // SPDX-License-Identifier: GPL-3.0+
 
 #include "GS/Renderers/HW/GSRendererHW.h"
+#include "GS/Renderers/HW/GSMeshReplace.h"
 #include "GS/Renderers/HW/GSTextureReplacements.h"
 #include "GS/GSGL.h"
 #include "GS/GSPerfMon.h"
 #include "GS/GSUtil.h"
 #include "Host.h"
+#include "VMManager.h"
 #include "common/Console.h"
 #include "common/BitUtils.h"
 #include "common/StringUtil.h"
@@ -22,6 +24,7 @@ GSRendererHW::GSRendererHW()
 	pxAssert(!g_texture_cache);
 	g_texture_cache = std::make_unique<GSTextureCache>();
 	GSTextureReplacements::Initialize();
+	g_mesh_replace_registry.Initialize(VMManager::GetDiscSerial());
 
 	// Hope nothing requires too many draw calls.
 	m_drawlist.reserve(2048);
@@ -40,6 +43,7 @@ void GSRendererHW::SetTCOffset()
 
 GSRendererHW::~GSRendererHW()
 {
+	g_mesh_replace_registry.Shutdown();
 	g_texture_cache.reset();
 }
 
@@ -5117,6 +5121,90 @@ void GSRendererHW::SetupIA(float target_scale, float sx, float sy, bool req_vert
 	m_conf.nindices = m_index.tail;
 }
 
+void GSRendererHW::ApplyMeshReplacement()
+{
+	if (!g_mesh_replace_registry.IsEnabled() || !m_process_texture)
+		return;
+
+	// Build the key from the current texture state
+	GSMeshReplaceKey key;
+	key.texture_tbp0 = m_cached_ctx.TEX0.TBP0;
+	key.texture_tw = m_cached_ctx.TEX0.TW;
+	key.texture_th = m_cached_ctx.TEX0.TH;
+	key.texture_psm = m_cached_ctx.TEX0.PSM;
+
+	// Check if we have a replacement for this draw
+	const GSMeshReplacement* replacement = g_mesh_replace_registry.GetReplacement(key);
+	if (!replacement)
+		return;
+
+	GL_INS("HW: Applying mesh replacement for TBP0=0x%04X TW=%u TH=%u PSM=%u",
+	       key.texture_tbp0, key.texture_tw, key.texture_th, key.texture_psm);
+
+	// Replace the vertex and index data
+	// We need to copy the replacement data into our buffers since they may be modified
+	const size_t num_verts = replacement->vertices.size();
+	const size_t num_indices = replacement->indices.size();
+
+	if (num_verts == 0 || num_indices == 0)
+		return;
+
+	// Copy replacement vertices, applying transforms and optionally preserving original color
+	const size_t max_verts = sizeof(m_vertex.buff) / sizeof(m_vertex.buff[0]);
+	const size_t max_indices = sizeof(m_index.buff) / sizeof(m_index.buff[0]);
+
+	for (size_t i = 0; i < num_verts && i < max_verts; i++)
+	{
+		GSVertex v = replacement->vertices[i];
+
+		// Apply position scale and offset
+		float x = static_cast<float>(v.XYZ.X) * replacement->position_scale.x + replacement->position_offset.x * 16.0f;
+		float y = static_cast<float>(v.XYZ.Y) * replacement->position_scale.y + replacement->position_offset.y * 16.0f;
+		float z = static_cast<float>(v.XYZ.Z) * replacement->position_scale.z + replacement->position_offset.z;
+
+		v.XYZ.X = static_cast<u16>(std::clamp(x, 0.0f, 65535.0f));
+		v.XYZ.Y = static_cast<u16>(std::clamp(y, 0.0f, 65535.0f));
+		v.XYZ.Z = static_cast<u32>(std::clamp(z, 0.0f, static_cast<float>(0xFFFFFFFF)));
+
+		// Apply UV scale and offset
+		if (!replacement->preserve_original_uv)
+		{
+			v.ST.S = v.ST.S * replacement->uv_scale.x + replacement->uv_offset.x;
+			v.ST.T = v.ST.T * replacement->uv_scale.y + replacement->uv_offset.y;
+			v.U = static_cast<u16>((v.ST.S * 16.0f));
+			v.V = static_cast<u16>((v.ST.T * 16.0f));
+		}
+
+		// Apply color override or preserve original
+		if (!replacement->preserve_original_color)
+		{
+			v.RGBAQ.U32[0] = replacement->override_color;
+		}
+		else if (m_vertex.next > 0)
+		{
+			// Use color from first original vertex
+			v.RGBAQ = m_vertex.buff[0].RGBAQ;
+		}
+
+		m_vertex.buff[i] = v;
+	}
+
+	// Copy replacement indices
+	for (size_t i = 0; i < num_indices && i < max_indices; i++)
+	{
+		m_index.buff[i] = replacement->indices[i];
+	}
+
+	// Update counts
+	m_vertex.next = static_cast<u32>((num_verts < max_verts) ? num_verts : max_verts);
+	m_index.tail = static_cast<u32>((num_indices < max_indices) ? num_indices : max_indices);
+
+	// Update vertex trace for the new geometry
+	m_vt.m_primclass = GS_TRIANGLE_CLASS;
+
+	Console.WriteLn("GSMeshReplace: Applied replacement (%zu verts, %zu indices)", num_verts, num_indices);
+}
+
 void GSRendererHW::EmulateZbuffer(const GSTextureCache::Target* ds)
 {
 	if (ds && m_cached_ctx.TEST.ZTE)
@@ -8046,6 +8134,9 @@ __ri void GSRendererHW::DrawPrims(GSTextureCache::Target* rt, GSTextureCache::Ta
 	}
 
 	HandleProvokingVertexFirst();
+
+	// Try to apply mesh replacement if enabled
+	ApplyMeshReplacement();
 
 	SetupIA(rtscale, sx, sy, m_channel_shuffle_width != 0);
 

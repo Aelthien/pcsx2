@@ -95,6 +95,7 @@ private:
 	void ResetStates();
 	void HandleProvokingVertexFirst();
 	void SetupIA(float target_scale, float sx, float sy, bool req_vert_backup);
+	void ApplyMeshReplacement();
 	void EmulateTextureShuffleAndFbmask(GSTextureCache::Target* rt, GSTextureCache::Source* tex);
 	bool EmulateChannelShuffle(GSTextureCache::Target* src, bool test_only, GSTextureCache::Target* rt = nullptr);
 	void EmulateBlending(int rt_alpha_min, int rt_alpha_max, const bool DATE, bool& DATE_PRIMID, bool& DATE_BARRIER, GSTextureCache::Target* rt,

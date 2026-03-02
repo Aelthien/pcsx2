@@ -207,6 +207,8 @@
     <ClCompile Include="GS\GSDrawingEnvironment.cpp" />
     <ClCompile Include="GS\Renderers\DX9\GSDevice9.cpp" />
     <ClCompile Include="GS\Renderers\DX9\GSTexture9.cpp" />
+    <ClCompile Include="GS\Renderers\DX9\VU1MemoryLayoutConfig.cpp" />
+    <ClCompile Include="GS\Renderers\DX9\VIFUnpackCapture.cpp" />
     <ClCompile Include="GS\Renderers\DX11\D3D11ShaderCache.cpp" />
     <ClCompile Include="GS\Renderers\DX12\D3D12Builders.cpp" />
     <ClCompile Include="GS\Renderers\DX12\D3D12DescriptorHeapManager.cpp" />
@@ -351,6 +353,7 @@
     <ClCompile Include="GS\GSDump.cpp" />
     <ClCompile Include="GS\Renderers\Common\GSFunctionMap.cpp" />
     <ClCompile Include="GS\Renderers\HW\GSHwHack.cpp" />
+    <ClCompile Include="GS\Renderers\HW\GSMeshReplace.cpp" />
     <ClCompile Include="GS\GSLocalMemory.cpp" />
     <ClCompile Include="GS\GSLocalMemoryMultiISA.cpp" />
     <ClCompile Include="GS\GSLzma.cpp" />
@@ -657,6 +660,8 @@
     <ClInclude Include="GS\GSVector4_arm64.h" />
     <ClInclude Include="GS\Renderers\DX9\GSDevice9.h" />
     <ClInclude Include="GS\Renderers\DX9\GSTexture9.h" />
+    <ClInclude Include="GS\Renderers\DX9\VU1MemoryLayoutConfig.h" />
+    <ClInclude Include="GS\Renderers\DX9\VIFUnpackCapture.h" />
     <ClInclude Include="GS\Renderers\DX11\D3D11ShaderCache.h" />
     <ClInclude Include="GS\Renderers\DX12\D3D12Builders.h" />
     <ClInclude Include="GS\Renderers\DX12\D3D12DescriptorHeapManager.h" />
@@ -801,6 +806,7 @@
     <ClInclude Include="GS\GSRingHeap.h" />
     <ClInclude Include="GS\Renderers\SW\GSRasterizer.h" />
     <ClInclude Include="GS\Renderers\Common\GSRenderer.h" />
+    <ClInclude Include="GS\Renderers\HW\GSMeshReplace.h" />
     <ClInclude Include="GS\Renderers\HW\GSRendererHW.h" />
     <ClInclude Include="GS\Renderers\Null\GSRendererNull.h" />
     <ClInclude Include="GS\Renderers\SW\GSRendererSW.h" />

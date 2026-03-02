@@ -8,6 +8,7 @@
 #include <cmath>
 #include "VUmicro.h"
 #include "MTVU.h"
+#include "GS/Renderers/DX9/VIFUnpackCapture.h"
 
 #ifdef PCSX2_DEBUG
 u32 vudump = 0;
@@ -48,6 +49,9 @@ void vu1Finish(bool add_cycles) {
 
 void vu1ExecMicro(u32 addr)
 {
+	// Capture VU1 input data before transformation (for RTX Remix)
+	VU1InputCapture_OnExecute(VU1.Mem, vif1Regs.itop, vif1Regs.top);
+
 	if (THREAD_VU1) {
 		VU0.VI[REG_VPU_STAT].UL &= ~0xFF00;
 		// Okay this is a little bit of a hack, but with good reason.

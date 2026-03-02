@@ -508,6 +508,7 @@ set(pcsx2GSSources
 	GS/Renderers/Common/RemixConfig.cpp
 	GS/Renderers/Null/GSRendererNull.cpp
 	GS/Renderers/HW/GSHwHack.cpp
+	GS/Renderers/HW/GSMeshReplace.cpp
 	GS/Renderers/HW/GSRendererHW.cpp
 	GS/Renderers/HW/GSTextureCache.cpp
 	GS/Renderers/HW/GSTextureReplacementLoaders.cpp
@@ -551,6 +552,7 @@ set(pcsx2GSHeaders
 	GS/Renderers/Common/RemixConfig.h
 	GS/Renderers/Null/GSRendererNull.h
 	GS/Renderers/HW/GSHwHack.h
+	GS/Renderers/HW/GSMeshReplace.h
 	GS/Renderers/HW/GSRendererHW.h
 	GS/Renderers/HW/GSTextureCache.h
 	GS/Renderers/HW/GSTextureReplacements.h
@@ -684,6 +686,8 @@ if(WIN32)
 	list(APPEND pcsx2GSSources
 		GS/Renderers/DX9/GSDevice9.cpp
 		GS/Renderers/DX9/GSTexture9.cpp
+		GS/Renderers/DX9/VU1MemoryLayoutConfig.cpp
+		GS/Renderers/DX9/VIFUnpackCapture.cpp
 		GS/Renderers/DX11/D3D.cpp
 		GS/Renderers/DX11/D3D11ShaderCache.cpp
 		GS/Renderers/DX11/GSDevice11.cpp
@@ -698,6 +702,8 @@ if(WIN32)
 	list(APPEND pcsx2GSHeaders
 		GS/Renderers/DX9/GSDevice9.h
 		GS/Renderers/DX9/GSTexture9.h
+		GS/Renderers/DX9/VU1MemoryLayoutConfig.h
+		GS/Renderers/DX9/VIFUnpackCapture.h
 		GS/Renderers/DX11/D3D.h
 		GS/Renderers/DX11/D3D11ShaderCache.h
 		GS/Renderers/DX11/GSDevice11.h

@@ -2,16 +2,20 @@
 // SPDX-License-Identifier: GPL-3.0+
 
 #include "GSDevice9.h"
+#include "VU1MemoryLayoutConfig.h"
+#include "VIFUnpackCapture.h"
 #include "GS/GSGL.h"
 #include "GS/GSPerfMon.h"
 #include "GS/GSUtil.h"
 #include "GS/Renderers/Common/GSVertex.h"
 #include "Host.h"
+#include "VMManager.h"
 
 #include "common/Console.h"
 
 #include "imgui.h"
 
+#include <cmath>
 #include <d3d9.h>
 #include <vector>
 
@@ -66,11 +70,18 @@ bool GSDevice9::Create(GSVSyncMode vsync_mode, bool allow_present_throttle)
 		return false;
 
 	m_max_texture_size = std::min<u32>(m_caps.MaxTextureWidth, m_caps.MaxTextureHeight);
+
+	// Auto-enable VU1 capture for pre-transform vertex data extraction
+	EnableVU1Capture(true);
+
 	return true;
 }
 
 void GSDevice9::Destroy()
 {
+	// Disable VU1 capture
+	EnableVU1Capture(false);
+
 	DestroyVertexDeclarations();
 	DestroyBuffers();
 	DestroyDevice();
@@ -566,6 +577,9 @@ void GSDevice9::RenderHW(GSHWDrawConfig& config)
 	if (!config.verts || config.nverts == 0 || !m_dev)
 		return;
 
+	// Get pending VU1 vertex snapshots (will be rendered after setup)
+	std::vector<VU1InputSnapshot> vu1Snapshots = VU1InputCapture::GetInstance().GetAndClearSnapshots();
+
 	// Debug: track texture usage
 	static int frame_count = 0;
 	static int tex_null_count = 0;
@@ -581,8 +595,6 @@ void GSDevice9::RenderHW(GSHWDrawConfig& config)
 	}
 	else
 		tex_null_count++;
-	if (frame_count % 1000 == 0)
-		printf("DX9: frames=%d tex_valid=%d tex_null=%d d3dtex_null=%d\n", frame_count, tex_valid_count, tex_null_count, d3dtex_null_count);
 
 	// D3D9 requires draw calls between BeginScene/EndScene
 	// RenderHW is called before BeginPresent, so we need to start a scene here
@@ -655,6 +667,12 @@ void GSDevice9::RenderHW(GSHWDrawConfig& config)
 
 	// Fixed function pipeline setup
 	m_dev->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
+	
+	// Disable all clipping - PS2 geometry may extend outside normal clip bounds
+	m_dev->SetRenderState(D3DRS_CLIPPING, FALSE);
+	
+	// Disable user clip planes
+	m_dev->SetRenderState(D3DRS_CLIPPLANEENABLE, 0);
 
 	// Disable D3D9 lighting - it overrides vertex colors and breaks texture display
 	// RTX Remix will use its own lighting system
@@ -670,11 +688,11 @@ void GSDevice9::RenderHW(GSHWDrawConfig& config)
 	mtrl.Ambient.g = 0.2f;
 	mtrl.Ambient.b = 0.2f;
 	mtrl.Ambient.a = 1.0f;
-	mtrl.Specular.r = 1.0f;
-	mtrl.Specular.g = 1.0f;
-	mtrl.Specular.b = 1.0f;
-	mtrl.Specular.a = 1.0f;
-	mtrl.Power = 50.0f;  // Specular power/sharpness
+	mtrl.Specular.r = 0.0f;
+	mtrl.Specular.g = 0.0f;
+	mtrl.Specular.b = 0.0f;
+	mtrl.Specular.a = 0.0f;
+	mtrl.Power = 0.0f;
 	m_dev->SetMaterial(&mtrl);
 
 	// Setup directional light for RTX Remix to detect
@@ -746,21 +764,45 @@ void GSDevice9::RenderHW(GSHWDrawConfig& config)
 	const float camDist = 500.0f;
 
 	// Set up transformation matrices for D3D9 and RTX Remix camera detection
-	// World matrix is identity
-	D3DMATRIX world = {
-		1, 0, 0, 0,
-		0, 1, 0, 0,
-		0, 0, 1, 0,
-		0, 0, 0, 1
-	};
+	// World matrix - use captured MVP from VU1 if available
+	D3DMATRIX world;
+	if (m_vu1Capture.hasData)
+	{
+		// Use captured MVP matrix from VU1 (row-major, matches D3D)
+		world._11 = m_vu1Capture.mvpMatrix[0];  world._12 = m_vu1Capture.mvpMatrix[1];
+		world._13 = m_vu1Capture.mvpMatrix[2];  world._14 = m_vu1Capture.mvpMatrix[3];
+		world._21 = m_vu1Capture.mvpMatrix[4];  world._22 = m_vu1Capture.mvpMatrix[5];
+		world._23 = m_vu1Capture.mvpMatrix[6];  world._24 = m_vu1Capture.mvpMatrix[7];
+		world._31 = m_vu1Capture.mvpMatrix[8];  world._32 = m_vu1Capture.mvpMatrix[9];
+		world._33 = m_vu1Capture.mvpMatrix[10]; world._34 = m_vu1Capture.mvpMatrix[11];
+		world._41 = m_vu1Capture.mvpMatrix[12]; world._42 = m_vu1Capture.mvpMatrix[13];
+		world._43 = m_vu1Capture.mvpMatrix[14]; world._44 = m_vu1Capture.mvpMatrix[15];
+	}
+	else
+	{
+		// Identity if no VU1 data captured
+		world._11 = 1; world._12 = 0; world._13 = 0; world._14 = 0;
+		world._21 = 0; world._22 = 1; world._23 = 0; world._24 = 0;
+		world._31 = 0; world._32 = 0; world._33 = 1; world._34 = 0;
+		world._41 = 0; world._42 = 0; world._43 = 0; world._44 = 1;
+	}
 	m_dev->SetTransform(D3DTS_WORLD, &world);
 
-	// Camera at origin looking down +Z
+	// Camera positioned to look at FFX geometry
+	// Geometry is at X: -112 to +116, Y: -6 to +2, Z: -224 to -159
+	// Place camera at Z=0, looking toward negative Z
+	
+	// Simple camera: at origin, looking down -Z axis (into the scene)
+	// This is like D3DXMatrixLookAtLH(eye=(0,50,0), at=(0,0,-200), up=(0,1,0))
+	// But simplified: just translate and rotate
+	
+	// View matrix: identity with Z translation to push geometry into view
+	// Camera effectively at (0, 0, 100), looking at (0, 0, -200)
 	D3DMATRIX view = {
 		1, 0, 0, 0,
 		0, 1, 0, 0,
 		0, 0, 1, 0,
-		0, 0, 0, 1
+		0, 0, 0, 1  // Identity - geometry coordinates used directly
 	};
 	m_dev->SetTransform(D3DTS_VIEW, &view);
 
@@ -781,6 +823,106 @@ void GSDevice9::RenderHW(GSHWDrawConfig& config)
 
 	// Store camDist for vertex transform
 	const float vertexZ = camDist;
+
+	// ============================================
+	// EXPERIMENTAL: Render raw VU1 object-space vertices
+	// This provides proper 3D geometry for RTX Remix
+	// ============================================
+	if (!vu1Snapshots.empty())
+	{
+		// Set identity world matrix for VU1 verts (they're in object space)
+		D3DMATRIX vu1World = {
+			1, 0, 0, 0,
+			0, 1, 0, 0,
+			0, 0, 1, 0,
+			0, 0, 0, 1
+		};
+		m_dev->SetTransform(D3DTS_WORLD, &vu1World);
+		
+		// Disable texturing for VU1 debug rendering
+		m_dev->SetTexture(0, nullptr);
+		m_dev->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_SELECTARG1);
+		m_dev->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_DIFFUSE);
+		
+		// Disable backface culling to show all triangles
+		m_dev->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
+		
+		// Render batches with valid vertex data
+		const size_t maxBatches = 2000;  // Increased to render more of the scene
+		size_t batchCount = 0;
+		for (const VU1InputSnapshot& snapshot : vu1Snapshots)
+		{
+			if (snapshot.vertexCount < 3)
+				continue;
+			
+			// Skip batches with zero/invalid vertex data
+			if (snapshot.vertices[0].x == 0.0f && snapshot.vertices[0].y == 0.0f && snapshot.vertices[0].z == 0.0f)
+				continue;
+			
+			// Build D3D9 vertices from raw VU1 data
+			std::vector<GSVertexDX9> vu1Verts(snapshot.vertexCount);
+			for (u32 i = 0; i < snapshot.vertexCount; i++)
+			{
+				const VU1RawVertex& srcV = snapshot.vertices[i];
+				GSVertexDX9& dstV = vu1Verts[i];
+				
+				// FFX coords: X ~±100, Y ~±10, Z ~-150 to -225
+				// Flip Y and Z for D3D coordinate system
+				dstV.x = srcV.x;
+				dstV.y = -srcV.y;  // Flip Y
+				dstV.z = -srcV.z;  // Flip Z to positive space
+				
+				// Default normal pointing toward camera
+				dstV.nx = 0.0f;
+				dstV.ny = 0.0f;
+				dstV.nz = -1.0f;
+				
+				// White color for better visibility
+				dstV.color = D3DCOLOR_ARGB(255, 255, 255, 255);
+				
+				// UV from captured data
+				dstV.u = srcV.hasUV ? srcV.s : 0.0f;
+				dstV.v = srcV.hasUV ? srcV.t : 0.0f;
+			}
+			
+			// Render as triangle strip (VU1 typically outputs strips)
+			if (snapshot.vertexCount >= 3)
+			{
+				u32 primCount = snapshot.vertexCount - 2;
+				m_dev->SetFVF(GSVERTEXDX9_FVF);
+				m_dev->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, primCount, vu1Verts.data(), sizeof(GSVertexDX9));
+			}
+			
+			batchCount++;
+			if (batchCount >= maxBatches)
+				break;
+		}
+		
+		static u32 vu1RenderDebug = 0;
+		vu1RenderDebug++;
+		if (vu1RenderDebug % 5000 == 1)
+		{
+			printf("VU1 Render: Drew %zu batches (rendered %zu)\n", vu1Snapshots.size(), batchCount);
+			// Print info from ALL first 5 batches with vertices
+			u32 printed = 0;
+			for (size_t bi = 0; bi < vu1Snapshots.size() && printed < 5; bi++)
+			{
+				const VU1InputSnapshot& s = vu1Snapshots[bi];
+				if (s.vertexCount >= 3)
+				{
+					printf("  [%zu] %u verts: (%.1f,%.1f,%.1f) (%.1f,%.1f,%.1f) (%.1f,%.1f,%.1f)\n",
+						bi, s.vertexCount,
+						s.vertices[0].x, s.vertices[0].y, s.vertices[0].z,
+						s.vertices[1].x, s.vertices[1].y, s.vertices[1].z,
+						s.vertices[2].x, s.vertices[2].y, s.vertices[2].z);
+					printed++;
+				}
+			}
+		}
+		
+		// Restore world matrix for GS rendering
+		m_dev->SetTransform(D3DTS_WORLD, &world);
+	}
 
 	// Convert GSVertex to D3D9 vertices
 	const GSVertex* src = config.verts;
@@ -835,10 +977,6 @@ void GSDevice9::RenderHW(GSHWDrawConfig& config)
 			d.u = (static_cast<float>(v.U) / 16.0f) / tex_w;
 			d.v = (static_cast<float>(v.V) / 16.0f) / tex_h;
 			
-			// Debug: print first vertex UV info once per 10000 draws
-			static int uv_debug_count = 0;
-			if (i == 0 && (uv_debug_count++ % 10000) == 0)
-				printf("UV: raw=%d,%d tex=%dx%d final=%.4f,%.4f\n", v.U, v.V, (int)tex_w, (int)tex_h, d.u, d.v);
 		}
 		else
 		{
@@ -901,41 +1039,42 @@ void GSDevice9::RenderHW(GSHWDrawConfig& config)
 		}
 	}
 
-	// Draw the actual game geometry
+	// Draw the geometry
 	m_dev->SetFVF(GSVERTEXDX9_FVF);
 
-	D3DPRIMITIVETYPE topology = D3DPT_TRIANGLELIST;
+	D3DPRIMITIVETYPE d3d_topology = D3DPT_TRIANGLELIST;
 	u32 prim_count = 0;
 	switch (config.topology)
 	{
 		case GSHWDrawConfig::Topology::Point:
-			topology = D3DPT_POINTLIST;
+			d3d_topology = D3DPT_POINTLIST;
 			prim_count = nverts;
 			break;
 		case GSHWDrawConfig::Topology::Line:
-			topology = D3DPT_LINELIST;
+			d3d_topology = D3DPT_LINELIST;
 			prim_count = nverts / 2;
 			break;
 		case GSHWDrawConfig::Topology::Triangle:
-			topology = D3DPT_TRIANGLELIST;
+			d3d_topology = D3DPT_TRIANGLELIST;
 			prim_count = nverts / 3;
 			break;
 	}
 
-	if (prim_count > 0)
-	{
-		if (config.indices && config.nindices > 0)
-		{
-			u32 index_prim_count = config.nindices / 3;
-			if (index_prim_count > 0)
-				m_dev->DrawIndexedPrimitiveUP(topology, 0, nverts, index_prim_count,
-					config.indices, D3DFMT_INDEX16, transformed.data(), sizeof(GSVertexDX9));
-		}
-		else
-		{
-			m_dev->DrawPrimitiveUP(topology, prim_count, transformed.data(), sizeof(GSVertexDX9));
-		}
-	}
+	// DISABLED: Original GS rendering - using VU1 capture instead
+	// if (prim_count > 0)
+	// {
+	// 	if (config.indices && config.nindices > 0)
+	// 	{
+	// 		u32 index_prim_count = config.nindices / 3;
+	// 		if (index_prim_count > 0)
+	// 			m_dev->DrawIndexedPrimitiveUP(d3d_topology, 0, nverts, index_prim_count,
+	// 				config.indices, D3DFMT_INDEX16, transformed.data(), sizeof(GSVertexDX9));
+	// 	}
+	// 	else
+	// 	{
+	// 		m_dev->DrawPrimitiveUP(d3d_topology, prim_count, transformed.data(), sizeof(GSVertexDX9));
+	// 	}
+	// }
 
 	m_dev->SetTexture(0, nullptr);
 }
@@ -1253,4 +1392,171 @@ void GSDevice9::PopDebugGroup()
 
 void GSDevice9::InsertDebugMessage(DebugMessageCategory category, const char* fmt, ...)
 {
+}
+
+void GSDevice9::EnableVU1Capture(bool enable)
+{
+	m_vu1Capture.enabled = enable;
+	m_vu1Capture.hasData = false;
+
+	// Also enable/disable the VU1 input capture for raw vertex data
+	VU1InputCapture::GetInstance().SetEnabled(enable);
+
+	if (!enable)
+	{
+		g_vu1LayoutConfig.Shutdown();
+	}
+}
+
+void GSDevice9::CaptureVU1Memory(const u8* vu1Mem, u32 size)
+{
+	if (!m_vu1Capture.enabled || !vu1Mem || size == 0)
+		return;
+
+	// Lazy initialization of layout config when game serial becomes available
+	if (g_vu1LayoutConfig.GetGameSerial().empty())
+	{
+		std::string gameSerial = VMManager::GetDiscSerial();
+		if (!gameSerial.empty())
+		{
+			g_vu1LayoutConfig.Initialize(gameSerial);
+		}
+	}
+
+	// Copy raw VU1 memory (16KB max)
+	u32 copySize = std::min(size, (u32)sizeof(m_vu1Capture.rawMemory));
+	std::memcpy(m_vu1Capture.rawMemory, vu1Mem, copySize);
+
+	// Get the layout config for the current game
+	const VU1MemoryLayout& layout = g_vu1LayoutConfig.GetLayout();
+
+	// Extract MVP matrix from VU1 memory using configured offset
+	const u32 mvpOffset = layout.mvpOffset;
+	if (mvpOffset + 64 <= copySize)
+	{
+		const float* mvpData = reinterpret_cast<const float*>(vu1Mem + mvpOffset);
+		
+		if (layout.mvpColumnMajor)
+		{
+			// Transpose from column-major to row-major
+			for (int row = 0; row < 4; row++)
+			{
+				for (int col = 0; col < 4; col++)
+				{
+					m_vu1Capture.mvpMatrix[row * 4 + col] = mvpData[col * 4 + row];
+				}
+			}
+		}
+		else
+		{
+			// Direct copy for row-major
+			for (int i = 0; i < 16; i++)
+			{
+				m_vu1Capture.mvpMatrix[i] = mvpData[i];
+			}
+		}
+	}
+
+	// Extract bone matrices using configured offsets
+	const u32 boneStartOffset = layout.boneStartOffset;
+	const u32 boneStride = layout.boneStride;
+	const u32 maxBones = std::min(layout.maxBones, (u32)64); // Cap at our array size
+	const bool is4x4 = layout.bone4x4;
+	const u32 boneSize = is4x4 ? 64 : 48; // 4x4 = 64 bytes, 4x3 = 48 bytes
+
+	m_vu1Capture.boneCount = 0;
+	for (u32 b = 0; b < maxBones; b++)
+	{
+		u32 boneOffset = boneStartOffset + (b * boneStride);
+		if (boneOffset + boneSize > copySize)
+			break;
+
+		const float* boneData = reinterpret_cast<const float*>(vu1Mem + boneOffset);
+
+		if (is4x4)
+		{
+			// Full 4x4 matrix
+			if (layout.boneColumnMajor)
+			{
+				// Transpose from column-major to row-major
+				for (int row = 0; row < 4; row++)
+				{
+					for (int col = 0; col < 4; col++)
+					{
+						m_vu1Capture.boneMatrices[b][row * 4 + col] = boneData[col * 4 + row];
+					}
+				}
+			}
+			else
+			{
+				for (int i = 0; i < 16; i++)
+				{
+					m_vu1Capture.boneMatrices[b][i] = boneData[i];
+				}
+			}
+		}
+		else
+		{
+			// 4x3 matrix - copy and extend to 4x4
+			if (layout.boneColumnMajor)
+			{
+				// 3x4 column-major (transpose of 4x3 row-major)
+				for (int row = 0; row < 4; row++)
+				{
+					for (int col = 0; col < 3; col++)
+					{
+						m_vu1Capture.boneMatrices[b][row * 4 + col] = boneData[col * 4 + row];
+					}
+				}
+				// Fill last column
+				m_vu1Capture.boneMatrices[b][3] = 0.0f;
+				m_vu1Capture.boneMatrices[b][7] = 0.0f;
+				m_vu1Capture.boneMatrices[b][11] = 0.0f;
+				m_vu1Capture.boneMatrices[b][15] = 1.0f;
+			}
+			else
+			{
+				// Row 0
+				m_vu1Capture.boneMatrices[b][0] = boneData[0];
+				m_vu1Capture.boneMatrices[b][1] = boneData[1];
+				m_vu1Capture.boneMatrices[b][2] = boneData[2];
+				m_vu1Capture.boneMatrices[b][3] = boneData[3];
+				// Row 1
+				m_vu1Capture.boneMatrices[b][4] = boneData[4];
+				m_vu1Capture.boneMatrices[b][5] = boneData[5];
+				m_vu1Capture.boneMatrices[b][6] = boneData[6];
+				m_vu1Capture.boneMatrices[b][7] = boneData[7];
+				// Row 2
+				m_vu1Capture.boneMatrices[b][8] = boneData[8];
+				m_vu1Capture.boneMatrices[b][9] = boneData[9];
+				m_vu1Capture.boneMatrices[b][10] = boneData[10];
+				m_vu1Capture.boneMatrices[b][11] = boneData[11];
+				// Row 3 (identity for 4x3 -> 4x4)
+				m_vu1Capture.boneMatrices[b][12] = 0.0f;
+				m_vu1Capture.boneMatrices[b][13] = 0.0f;
+				m_vu1Capture.boneMatrices[b][14] = 0.0f;
+				m_vu1Capture.boneMatrices[b][15] = 1.0f;
+			}
+		}
+
+		m_vu1Capture.boneCount++;
+
+		// Check if this looks like a valid bone matrix (has reasonable values)
+		// Stop if we hit invalid data
+		bool validMatrix = true;
+		int checkCount = is4x4 ? 16 : 12;
+		for (int i = 0; i < checkCount && validMatrix; i++)
+		{
+			float v = boneData[i];
+			if (std::isnan(v) || std::isinf(v) || std::abs(v) > 10000.0f)
+				validMatrix = false;
+		}
+		if (!validMatrix)
+		{
+			m_vu1Capture.boneCount--;
+			break;
+		}
+	}
+
+	m_vu1Capture.hasData = true;
 }

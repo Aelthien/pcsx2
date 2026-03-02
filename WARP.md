@@ -20,6 +20,8 @@ msbuild PCSX2_qt.sln /m /v:m /p:Configuration=Debug /p:Platform=x64
 msbuild PCSX2_qt.sln /m /v:m /p:Configuration=Devel /p:Platform=x64
 ```
 
+**Default build command:** `msbuild PCSX2_qt.sln /m /v:m /p:Configuration=Devel /p:Platform=x64`
+
 ### Windows (CMake)
 ```powershell
 # Configure with Ninja (requires Visual Studio environment)

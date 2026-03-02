@@ -1073,6 +1073,9 @@
     <ClCompile Include="GS\Renderers\HW\GSHwHack.cpp">
       <Filter>System\Ps2\GS\Renderers\Hardware</Filter>
     </ClCompile>
+    <ClCompile Include="GS\Renderers\HW\GSMeshReplace.cpp">
+      <Filter>System\Ps2\GS\Renderers\Hardware</Filter>
+    </ClCompile>
     <ClCompile Include="GS\Renderers\Common\GSRenderer.cpp">
       <Filter>System\Ps2\GS\Renderers\Common</Filter>
     </ClCompile>
@@ -1248,6 +1251,12 @@
       <Filter>System\Ps2\GS\Renderers\Direct3D9</Filter>
     </ClCompile>
     <ClCompile Include="GS\Renderers\DX9\GSTexture9.cpp">
+      <Filter>System\Ps2\GS\Renderers\Direct3D9</Filter>
+    </ClCompile>
+    <ClCompile Include="GS\Renderers\DX9\VU1MemoryLayoutConfig.cpp">
+      <Filter>System\Ps2\GS\Renderers\Direct3D9</Filter>
+    </ClCompile>
+    <ClCompile Include="GS\Renderers\DX9\VIFUnpackCapture.cpp">
       <Filter>System\Ps2\GS\Renderers\Direct3D9</Filter>
     </ClCompile>
     <ClCompile Include="GS\Renderers\DX11\D3D11ShaderCache.cpp">
@@ -2018,6 +2027,9 @@
     <ClInclude Include="GS\Renderers\Null\GSRendererNull.h">
       <Filter>System\Ps2\GS\Renderers\Null</Filter>
     </ClInclude>
+    <ClInclude Include="GS\Renderers\HW\GSMeshReplace.h">
+      <Filter>System\Ps2\GS\Renderers\Hardware</Filter>
+    </ClInclude>
     <ClInclude Include="GS\Renderers\HW\GSRendererHW.h">
       <Filter>System\Ps2\GS\Renderers\Hardware</Filter>
     </ClInclude>
@@ -2224,6 +2236,12 @@
       <Filter>System\Ps2\GS\Renderers\Direct3D9</Filter>
     </ClInclude>
     <ClInclude Include="GS\Renderers\DX9\GSTexture9.h">
+      <Filter>System\Ps2\GS\Renderers\Direct3D9</Filter>
+    </ClInclude>
+    <ClInclude Include="GS\Renderers\DX9\VU1MemoryLayoutConfig.h">
+      <Filter>System\Ps2\GS\Renderers\Direct3D9</Filter>
+    </ClInclude>
+    <ClInclude Include="GS\Renderers\DX9\VIFUnpackCapture.h">
       <Filter>System\Ps2\GS\Renderers\Direct3D9</Filter>
     </ClInclude>
     <ClInclude Include="GS\Renderers\DX11\D3D11ShaderCache.h">

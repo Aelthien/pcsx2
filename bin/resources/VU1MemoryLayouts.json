@@ -1,0 +1,189 @@
+{
+  "_comment": "VU1 Memory Layout Configuration for PS2 Games",
+  "_description": "Maps game serials to their VU1 memory layouts for extracting pre-transform vertex data",
+  "_format_version": 1,
+
+  "defaults": {
+    "mvp_offset": "0x00",
+    "mvp_format": "4x4_row_major",
+    "bone_start_offset": "0x100",
+    "bone_stride": "0x30",
+    "bone_format": "4x3_row_major",
+    "max_bones": 64,
+    "vertex_data_offset": "0x400",
+    "vertex_stride": "0x10",
+    "vertex_format": "xyzw_float"
+  },
+
+  "games": {
+    "SLUS-20312": {
+      "_name": "Final Fantasy X (US)",
+      "mvp_offset": "0x00",
+      "mvp_format": "4x4_row_major",
+      "scale_offset": "0x40",
+      "bone_start_offset": "0x100",
+      "bone_stride": "0x30",
+      "bone_format": "4x3_row_major",
+      "max_bones": 64,
+      "notes": "Character models use skeletal animation with up to 64 bones"
+    },
+    "SLES-50490": {
+      "_name": "Final Fantasy X (EU)",
+      "mvp_offset": "0x00",
+      "mvp_format": "4x4_row_major",
+      "scale_offset": "0x40",
+      "bone_start_offset": "0x100",
+      "bone_stride": "0x30",
+      "bone_format": "4x3_row_major",
+      "max_bones": 64
+    },
+    "SLPM-62046": {
+      "_name": "Final Fantasy X International (JP)",
+      "mvp_offset": "0x00",
+      "mvp_format": "4x4_row_major",
+      "scale_offset": "0x40",
+      "bone_start_offset": "0x100",
+      "bone_stride": "0x30",
+      "bone_format": "4x3_row_major",
+      "max_bones": 64
+    },
+    "SLUS-20144": {
+      "_name": "Kingdom Hearts (US)",
+      "mvp_offset": "0x00",
+      "mvp_format": "4x4_row_major",
+      "bone_start_offset": "0x80",
+      "bone_stride": "0x40",
+      "bone_format": "4x4_row_major",
+      "max_bones": 48,
+      "notes": "KH uses 4x4 bone matrices"
+    },
+    "SLUS-21005": {
+      "_name": "Kingdom Hearts II (US)",
+      "mvp_offset": "0x00",
+      "mvp_format": "4x4_row_major",
+      "bone_start_offset": "0x80",
+      "bone_stride": "0x40",
+      "bone_format": "4x4_row_major",
+      "max_bones": 64
+    },
+    "SLUS-21259": {
+      "_name": "Final Fantasy XII (US)",
+      "mvp_offset": "0x00",
+      "mvp_format": "4x4_row_major",
+      "bone_start_offset": "0xC0",
+      "bone_stride": "0x30",
+      "bone_format": "4x3_row_major",
+      "max_bones": 64,
+      "notes": "FFXII uses different offset for bones"
+    },
+    "SLUS-20946": {
+      "_name": "Metal Gear Solid 3: Snake Eater (US)",
+      "mvp_offset": "0x00",
+      "mvp_format": "4x4_column_major",
+      "bone_start_offset": "0x100",
+      "bone_stride": "0x40",
+      "bone_format": "4x4_column_major",
+      "max_bones": 32,
+      "notes": "MGS3 uses column-major matrices"
+    },
+    "SLUS-20062": {
+      "_name": "Devil May Cry (US)",
+      "mvp_offset": "0x00",
+      "mvp_format": "4x4_row_major",
+      "bone_start_offset": "0x80",
+      "bone_stride": "0x30",
+      "bone_format": "4x3_row_major",
+      "max_bones": 48
+    },
+    "SLUS-20063": {
+      "_name": "Onimusha: Warlords (US)",
+      "mvp_offset": "0x00",
+      "mvp_format": "4x4_row_major",
+      "bone_start_offset": "0x80",
+      "bone_stride": "0x30",
+      "bone_format": "4x3_row_major",
+      "max_bones": 32
+    },
+    "SCUS-97124": {
+      "_name": "Ratchet & Clank (US)",
+      "mvp_offset": "0x00",
+      "mvp_format": "4x4_row_major",
+      "bone_start_offset": "0x100",
+      "bone_stride": "0x30",
+      "bone_format": "4x3_row_major",
+      "max_bones": 32,
+      "notes": "Insomniac engine"
+    },
+    "SCUS-97199": {
+      "_name": "Jak and Daxter (US)",
+      "mvp_offset": "0x00",
+      "mvp_format": "4x4_row_major",
+      "bone_start_offset": "0xC0",
+      "bone_stride": "0x40",
+      "bone_format": "4x4_row_major",
+      "max_bones": 48,
+      "notes": "Naughty Dog engine uses 4x4 bones"
+    },
+    "SLUS-20552": {
+      "_name": "Shadow of the Colossus (US)",
+      "mvp_offset": "0x00",
+      "mvp_format": "4x4_row_major",
+      "bone_start_offset": "0x100",
+      "bone_stride": "0x30",
+      "bone_format": "4x3_row_major",
+      "max_bones": 64,
+      "notes": "ICO Team engine, complex skeletal system for colossi"
+    },
+    "SLUS-20488": {
+      "_name": "God of War (US)",
+      "mvp_offset": "0x00",
+      "mvp_format": "4x4_row_major",
+      "bone_start_offset": "0x80",
+      "bone_stride": "0x30",
+      "bone_format": "4x3_row_major",
+      "max_bones": 48
+    }
+  },
+
+  "matrix_formats": {
+    "4x4_row_major": {
+      "rows": 4,
+      "cols": 4,
+      "size_bytes": 64,
+      "description": "Standard 4x4 matrix, row-major layout (DirectX style)"
+    },
+    "4x4_column_major": {
+      "rows": 4,
+      "cols": 4,
+      "size_bytes": 64,
+      "description": "4x4 matrix, column-major layout (OpenGL style)"
+    },
+    "4x3_row_major": {
+      "rows": 4,
+      "cols": 3,
+      "size_bytes": 48,
+      "description": "Compact 4x3 matrix (no bottom row), row-major"
+    },
+    "3x4_column_major": {
+      "rows": 3,
+      "cols": 4,
+      "size_bytes": 48,
+      "description": "Compact 3x4 matrix (transposed 4x3), column-major"
+    }
+  },
+
+  "vertex_formats": {
+    "xyzw_float": {
+      "size_bytes": 16,
+      "components": ["x", "y", "z", "w"],
+      "type": "float32",
+      "description": "Standard XYZW float vector"
+    },
+    "xyz_float_pad": {
+      "size_bytes": 16,
+      "components": ["x", "y", "z", "pad"],
+      "type": "float32",
+      "description": "XYZ float with padding"
+    }
+  }
+}

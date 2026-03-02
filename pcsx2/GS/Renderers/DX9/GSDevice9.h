@@ -103,9 +103,20 @@ private:
 	u32 m_rt_ds_width = 0;
 	u32 m_rt_ds_height = 0;
 	
-	// Track if we've rendered directly to backbuffer this frame (for RTX Remix)
+// Track if we've rendered directly to backbuffer this frame (for RTX Remix)
 	bool m_rendered_to_backbuffer = false;
 	bool m_in_scene = false;
+
+	// VU1 memory capture for skeletal/pre-transform data extraction
+	struct VU1Capture
+	{
+		bool enabled = false;
+		bool hasData = false;
+		float mvpMatrix[16] = {};
+		float boneMatrices[64][16] = {}; // Up to 64 bones
+		u32 boneCount = 0;
+		u8 rawMemory[16384] = {}; // Full VU1 memory snapshot
+	} m_vu1Capture;
 
 	// Cached states
 	std::unordered_map<u32, IDirect3DPixelShader9*> m_ps_cache;
@@ -192,6 +203,12 @@ public:
 	void RenderHW(GSHWDrawConfig& config) override;
 
 	void ClearSamplerCache() override;
+
+	// VU1 memory capture for extracting pre-transform data
+	void EnableVU1Capture(bool enable);
+	void CaptureVU1Memory(const u8* vu1Mem, u32 size);
+	bool HasVU1CaptureData() const { return m_vu1Capture.hasData; }
+	const float* GetCapturedMVPMatrix() const { return m_vu1Capture.mvpMatrix; }
 
 	// Vertex/Index buffer management
 	void* IAMapVertexBuffer(u32 stride, u32 count);

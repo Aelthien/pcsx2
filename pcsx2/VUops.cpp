@@ -4,8 +4,14 @@
 #include "Common.h"
 #include "VUops.h"
 #include "GS.h"
+#include "GS/GS.h"
+#include "GS/Renderers/Common/GSDevice.h"
 #include "Gif_Unit.h"
 #include "MTVU.h"
+
+#ifdef _WIN32
+#include "GS/Renderers/DX9/GSDevice9.h"
+#endif
 
 #include <cmath>
 u32 laststall = 0;
@@ -1910,6 +1916,13 @@ static __ri void _vuXGKICK(VURegs* VU)
 {
 	if (VU->xgkickenable)
 		_vuXGKICKTransfer(0, true);
+
+	// Capture VU1 memory state for D3D9 renderer (pre-transform data extraction)
+	if (VU == &vuRegs[1] && g_gs_device && g_gs_device->GetRenderAPI() == RenderAPI::D3D9)
+	{
+		GSDevice9* dev9 = static_cast<GSDevice9*>(g_gs_device.get());
+		dev9->CaptureVU1Memory(VU->Mem, 0x4000); // 16KB VU1 memory
+	}
 
 	u32 addr = (VU->VI[_Is_].US[0] & 0x3ff) * 16;
 	u32 diff = 0x4000 - addr;
