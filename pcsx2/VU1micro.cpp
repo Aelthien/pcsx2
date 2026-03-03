@@ -49,9 +49,6 @@ void vu1Finish(bool add_cycles) {
 
 void vu1ExecMicro(u32 addr)
 {
-	// Capture VU1 input data before transformation (for RTX Remix)
-	VU1InputCapture_OnExecute(VU1.Mem, vif1Regs.itop, vif1Regs.top);
-
 	if (THREAD_VU1) {
 		VU0.VI[REG_VPU_STAT].UL &= ~0xFF00;
 		// Okay this is a little bit of a hack, but with good reason.
@@ -81,6 +78,10 @@ void vu1ExecMicro(u32 addr)
 		CpuVU1->ExecuteBlock(1);
 	else
 		CpuVU1->Execute(vu1RunCycles);
+	
+	// Capture VU1 input data AFTER VU1 execution (data is now in memory)
+	// Note: We capture the INPUT data that VU1 just processed, not the output
+	VU1InputCapture_OnExecute(VU1.Mem, vif1Regs.itop, vif1Regs.top);
 }
 
 void MTVUInterrupt()

@@ -577,6 +577,14 @@ void GSDevice9::RenderHW(GSHWDrawConfig& config)
 	if (!config.verts || config.nverts == 0 || !m_dev)
 		return;
 
+	// Enable VU1 capture on first call
+	static bool captureEnabled = false;
+	if (!captureEnabled)
+	{
+		VU1InputCapture::GetInstance().SetEnabled(true);
+		captureEnabled = true;
+	}
+
 	// Get pending VU1 vertex snapshots (will be rendered after setup)
 	std::vector<VU1InputSnapshot> vu1Snapshots = VU1InputCapture::GetInstance().GetAndClearSnapshots();
 
@@ -695,29 +703,9 @@ void GSDevice9::RenderHW(GSHWDrawConfig& config)
 	mtrl.Power = 0.0f;
 	m_dev->SetMaterial(&mtrl);
 
-	// Setup directional light for RTX Remix to detect
-	D3DLIGHT9 light = {};
-	light.Type = D3DLIGHT_DIRECTIONAL;
-	light.Diffuse.r = 2.0f;
-	light.Diffuse.g = 1.9f;
-	light.Diffuse.b = 1.7f;
-	light.Diffuse.a = 1.0f;
-	light.Specular.r = 1.0f;
-	light.Specular.g = 1.0f;
-	light.Specular.b = 1.0f;
-	light.Specular.a = 1.0f;
-	light.Ambient.r = 0.3f;
-	light.Ambient.g = 0.3f;
-	light.Ambient.b = 0.3f;
-	light.Ambient.a = 1.0f;
-	light.Direction.x = 0.5f;
-	light.Direction.y = -0.7f;
-	light.Direction.z = 0.5f;
-	m_dev->SetLight(0, &light);
-	m_dev->LightEnable(0, TRUE);
-
-	// Set ambient light
-	m_dev->SetRenderState(D3DRS_AMBIENT, D3DCOLOR_XRGB(80, 80, 80));
+	// Disable lights - let RTX Remix handle lighting
+	m_dev->LightEnable(0, FALSE);
+	m_dev->SetRenderState(D3DRS_AMBIENT, D3DCOLOR_XRGB(255, 255, 255));
 
 	// Enable depth testing but respect game's depth write setting
 	// Skyboxes typically have depth write disabled (zwe=0)
@@ -796,13 +784,16 @@ void GSDevice9::RenderHW(GSHWDrawConfig& config)
 	// This is like D3DXMatrixLookAtLH(eye=(0,50,0), at=(0,0,-200), up=(0,1,0))
 	// But simplified: just translate and rotate
 	
-	// View matrix: identity with Z translation to push geometry into view
-	// Camera effectively at (0, 0, 100), looking at (0, 0, -200)
+	// View matrix: position camera to look at FFX geometry
+	// FFX geometry is at approximately X: -20 to +6, Y: -10 to -3, Z: -170 to -145
+	// Camera at (0, 0, 0) looking at (0, 0, -160)
+	// For D3D LH: view matrix translates world so camera is at origin
+	// Simple case: just translate geometry forward (positive Z)
 	D3DMATRIX view = {
 		1, 0, 0, 0,
 		0, 1, 0, 0,
 		0, 0, 1, 0,
-		0, 0, 0, 1  // Identity - geometry coordinates used directly
+		0, 5, 160, 1  // Translate: cam looks at world origin offset by (0, -5, -160)
 	};
 	m_dev->SetTransform(D3DTS_VIEW, &view);
 
@@ -825,12 +816,118 @@ void GSDevice9::RenderHW(GSHWDrawConfig& config)
 	const float vertexZ = camDist;
 
 	// ============================================
-	// EXPERIMENTAL: Render raw VU1 object-space vertices
-	// This provides proper 3D geometry for RTX Remix
+	// DEBUG: Render single VU1 mesh centered on screen
 	// ============================================
-	if (!vu1Snapshots.empty())
+	// Static storage for captured meshes (persists across frames)
+	static std::vector<VU1InputSnapshot> capturedMeshes;
+	static bool meshesCaptured = false;
+	static u32 currentMeshIndex = 0;
+	static u32 lastPrintedIndex = 0xFFFFFFFF;
+	static std::chrono::steady_clock::time_point lastSwitchTime = std::chrono::steady_clock::now();
+	const int secondsPerMesh = 5;
+	
+	// Capture meshes once when we have valid data
+	// Simple copy - no splitting since GS uses triangle lists
+	if (!meshesCaptured && !vu1Snapshots.empty())
 	{
-		// Set identity world matrix for VU1 verts (they're in object space)
+		for (const VU1InputSnapshot& snapshot : vu1Snapshots)
+		{
+			if (snapshot.vertexCount >= 3)
+			{
+				capturedMeshes.push_back(snapshot);
+			}
+		}
+		
+		if (!capturedMeshes.empty())
+		{
+			meshesCaptured = true;
+			printf("Captured %zu separate meshes for visualization\n", capturedMeshes.size());
+			
+			// Debug: dump first snapshot's W values to find pattern
+			if (!vu1Snapshots.empty())
+			{
+				const VU1InputSnapshot& snap = vu1Snapshots[0];
+				printf("First snapshot: %u vertices\n", snap.vertexCount);
+				printf("W values (first 50): ");
+				for (u32 i = 0; i < snap.vertexCount && i < 50; i++)
+				{
+					printf("%.1f ", snap.vertices[i].w);
+				}
+				printf("\n");
+				
+				// Also check for position patterns
+				printf("Position jumps (dist > 20):\n");
+				for (u32 i = 1; i < snap.vertexCount && i < 100; i++)
+				{
+					const VU1RawVertex& prev = snap.vertices[i-1];
+					const VU1RawVertex& curr = snap.vertices[i];
+					float dx = curr.x - prev.x;
+					float dy = curr.y - prev.y;
+					float dz = curr.z - prev.z;
+					float dist = sqrtf(dx*dx + dy*dy + dz*dz);
+					if (dist > 20.0f)
+					{
+						printf("  [%u->%u] dist=%.1f\n", i-1, i, dist);
+					}
+				}
+			}
+		}
+	}
+	
+	if (meshesCaptured && !capturedMeshes.empty())
+	{
+		// Compute scene bounds from all meshes
+		static float sceneCenterX = 0, sceneCenterY = 0, sceneCenterZ = 0;
+		static float sceneRadius = 100.0f;
+		static bool boundsComputed = false;
+		
+		if (!boundsComputed)
+		{
+			float minX = 1e9f, maxX = -1e9f;
+			float minY = 1e9f, maxY = -1e9f;
+			float minZ = 1e9f, maxZ = -1e9f;
+			
+			for (const VU1InputSnapshot& mesh : capturedMeshes)
+			{
+				for (u32 i = 0; i < mesh.vertexCount; i++)
+				{
+					minX = std::min(minX, mesh.vertices[i].x);
+					maxX = std::max(maxX, mesh.vertices[i].x);
+					minY = std::min(minY, mesh.vertices[i].y);
+					maxY = std::max(maxY, mesh.vertices[i].y);
+					minZ = std::min(minZ, mesh.vertices[i].z);
+					maxZ = std::max(maxZ, mesh.vertices[i].z);
+				}
+			}
+			
+			sceneCenterX = (minX + maxX) * 0.5f;
+			sceneCenterY = (minY + maxY) * 0.5f;
+			sceneCenterZ = (minZ + maxZ) * 0.5f;
+			
+			float dx = maxX - minX;
+			float dy = maxY - minY;
+			float dz = maxZ - minZ;
+			sceneRadius = sqrtf(dx*dx + dy*dy + dz*dz) * 0.5f;
+			
+			printf("\n=== SCENE BOUNDS ===\n");
+			printf("  X: [%.1f, %.1f]  Y: [%.1f, %.1f]  Z: [%.1f, %.1f]\n", minX, maxX, minY, maxY, minZ, maxZ);
+			printf("  Center: (%.1f, %.1f, %.1f)  Radius: %.1f\n", sceneCenterX, sceneCenterY, sceneCenterZ, sceneRadius);
+			printf("  Total meshes: %zu\n\n", capturedMeshes.size());
+			
+			boundsComputed = true;
+		}
+		
+		// Set view matrix to look at scene center
+		float camDist = (sceneRadius * 1.5f + 50.0f) / 20.0f;  // Divide by 20 to get even closer
+		D3DMATRIX sceneView = {
+			1, 0, 0, 0,
+			0, 1, 0, 0,
+			0, 0, 1, 0,
+			-sceneCenterX, sceneCenterY, sceneCenterZ + camDist, 1
+		};
+		m_dev->SetTransform(D3DTS_VIEW, &sceneView);
+		
+		// Set identity world matrix
 		D3DMATRIX vu1World = {
 			1, 0, 0, 0,
 			0, 1, 0, 0,
@@ -839,88 +936,55 @@ void GSDevice9::RenderHW(GSHWDrawConfig& config)
 		};
 		m_dev->SetTransform(D3DTS_WORLD, &vu1World);
 		
-		// Disable texturing for VU1 debug rendering
+		// Setup rendering state
 		m_dev->SetTexture(0, nullptr);
 		m_dev->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_SELECTARG1);
 		m_dev->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_DIFFUSE);
-		
-		// Disable backface culling to show all triangles
 		m_dev->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
+		m_dev->SetRenderState(D3DRS_FILLMODE, D3DFILL_SOLID);
+		m_dev->SetRenderState(D3DRS_ZENABLE, D3DZB_TRUE);
+		m_dev->SetRenderState(D3DRS_ZWRITEENABLE, TRUE);
+		m_dev->SetFVF(GSVERTEXDX9_FVF);
 		
-		// Render batches with valid vertex data
-		const size_t maxBatches = 2000;  // Increased to render more of the scene
-		size_t batchCount = 0;
-		for (const VU1InputSnapshot& snapshot : vu1Snapshots)
+		// Render ALL meshes
+		for (size_t meshIdx = 0; meshIdx < capturedMeshes.size(); meshIdx++)
 		{
-			if (snapshot.vertexCount < 3)
+			const VU1InputSnapshot& mesh = capturedMeshes[meshIdx];
+			if (mesh.vertexCount < 3)
 				continue;
 			
-			// Skip batches with zero/invalid vertex data
-			if (snapshot.vertices[0].x == 0.0f && snapshot.vertices[0].y == 0.0f && snapshot.vertices[0].z == 0.0f)
-				continue;
-			
-			// Build D3D9 vertices from raw VU1 data
-			std::vector<GSVertexDX9> vu1Verts(snapshot.vertexCount);
-			for (u32 i = 0; i < snapshot.vertexCount; i++)
+			// Build vertices
+			std::vector<GSVertexDX9> vu1Verts(mesh.vertexCount);
+			for (u32 i = 0; i < mesh.vertexCount; i++)
 			{
-				const VU1RawVertex& srcV = snapshot.vertices[i];
+				const VU1RawVertex& srcV = mesh.vertices[i];
 				GSVertexDX9& dstV = vu1Verts[i];
 				
-				// FFX coords: X ~±100, Y ~±10, Z ~-150 to -225
-				// Flip Y and Z for D3D coordinate system
 				dstV.x = srcV.x;
-				dstV.y = -srcV.y;  // Flip Y
-				dstV.z = -srcV.z;  // Flip Z to positive space
+				dstV.y = -srcV.y;  // Flip Y for D3D
+				dstV.z = -srcV.z;  // Flip Z (PS2 uses -Z forward)
 				
-				// Default normal pointing toward camera
 				dstV.nx = 0.0f;
 				dstV.ny = 0.0f;
 				dstV.nz = -1.0f;
 				
-				// White color for better visibility
-				dstV.color = D3DCOLOR_ARGB(255, 255, 255, 255);
+				// Matte gray for all meshes
+				dstV.color = D3DCOLOR_ARGB(255, 128, 128, 128);
 				
-				// UV from captured data
 				dstV.u = srcV.hasUV ? srcV.s : 0.0f;
 				dstV.v = srcV.hasUV ? srcV.t : 0.0f;
 			}
 			
-			// Render as triangle strip (VU1 typically outputs strips)
-			if (snapshot.vertexCount >= 3)
+			u32 triCount = mesh.vertexCount / 3;
+			if (triCount > 0)
 			{
-				u32 primCount = snapshot.vertexCount - 2;
-				m_dev->SetFVF(GSVERTEXDX9_FVF);
-				m_dev->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, primCount, vu1Verts.data(), sizeof(GSVertexDX9));
-			}
-			
-			batchCount++;
-			if (batchCount >= maxBatches)
-				break;
-		}
-		
-		static u32 vu1RenderDebug = 0;
-		vu1RenderDebug++;
-		if (vu1RenderDebug % 5000 == 1)
-		{
-			printf("VU1 Render: Drew %zu batches (rendered %zu)\n", vu1Snapshots.size(), batchCount);
-			// Print info from ALL first 5 batches with vertices
-			u32 printed = 0;
-			for (size_t bi = 0; bi < vu1Snapshots.size() && printed < 5; bi++)
-			{
-				const VU1InputSnapshot& s = vu1Snapshots[bi];
-				if (s.vertexCount >= 3)
-				{
-					printf("  [%zu] %u verts: (%.1f,%.1f,%.1f) (%.1f,%.1f,%.1f) (%.1f,%.1f,%.1f)\n",
-						bi, s.vertexCount,
-						s.vertices[0].x, s.vertices[0].y, s.vertices[0].z,
-						s.vertices[1].x, s.vertices[1].y, s.vertices[1].z,
-						s.vertices[2].x, s.vertices[2].y, s.vertices[2].z);
-					printed++;
-				}
+				m_dev->DrawPrimitiveUP(D3DPT_TRIANGLELIST, triCount,
+					vu1Verts.data(), sizeof(GSVertexDX9));
 			}
 		}
 		
-		// Restore world matrix for GS rendering
+		// Restore matrices
+		m_dev->SetTransform(D3DTS_VIEW, &view);
 		m_dev->SetTransform(D3DTS_WORLD, &world);
 	}
 

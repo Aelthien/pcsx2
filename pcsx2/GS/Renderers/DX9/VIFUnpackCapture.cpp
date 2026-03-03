@@ -16,7 +16,6 @@ void VU1InputCapture::SetEnabled(bool enabled)
 {
 	std::lock_guard<std::mutex> lock(m_mutex);
 	m_enabled = enabled;
-	printf("VU1InputCapture: SetEnabled(%s)\n", enabled ? "true" : "false");
 	
 	// FFX uses stride of 1 (position only per quadword)
 	m_vertexStride = 1;
@@ -34,42 +33,44 @@ void VU1InputCapture::OnVU1Execute(const u8* vuMem, u32 itop, u32 top)
 		return;
 
 	std::lock_guard<std::mutex> lock(m_mutex);
-
-	// Debug: print occasionally
-	static u32 captureCounter = 0;
-	captureCounter++;
+	
+	// Debug: log TOP values once
+	static bool topLogged = false;
+	static u32 topSamples[20];
+	static int topSampleCount = 0;
+	if (!topLogged && topSampleCount < 20)
+	{
+		topSamples[topSampleCount++] = top;
+		if (topSampleCount == 20)
+		{
+			printf("VU1 TOP samples: ");
+			for (int i = 0; i < 20; i++)
+				printf("%u ", topSamples[i]);
+			printf("\n");
+			topLogged = true;
+		}
+	}
 
 	VU1InputSnapshot snapshot = {};
 	snapshot.frameNumber = m_frameNumber;
 	snapshot.isValid = true;
 
-	// For FFX: vertex data is at 0x0F00 or 0x2C00 (double-buffered)
-	// TOP register indicates which double-buffer is active
-	// TOP in range ~96-128 uses buffer at 0x0F00
-	// TOP in range ~560+ uses buffer at 0x2C00
-	u32 vertexAddr = m_vertexDataOffset;
-	if (vertexAddr == 0)
-	{
-		// Convert TOP to byte address: TOP * 16
-		u32 topAddr = (top & 0x3FF) * 16;
-		
-		// If TOP points to upper memory (>= 0x2000), use 0x2C00 buffer
-		// Otherwise use 0x0F00 buffer
-		if (topAddr >= 0x2000)
-		{
-			vertexAddr = 0x2C00;
-		}
-		else if (topAddr >= 0x0600)
-		{
-			vertexAddr = 0x0F00;
-		}
-		else
-		{
-			// Small TOP values - might be different draw type, skip
-			return;
-		}
-	}
+	// FFX vertex data layout discovered via memory scan:
+	// TOP=96 -> vertices at 0x0E80 (buffer 1)
+	// TOP=560 -> vertices at 0x2B80 (buffer 2)
+	// The TOP value points to metadata, not actual vertex data
+	u32 vertexAddr;
+	if (top == 96)
+		vertexAddr = 0x0E80;  // First vertex buffer
+	else if (top == 560)
+		vertexAddr = 0x2B80;  // Second vertex buffer  
+	else
+		vertexAddr = 0x0E80;  // Default
+	
 	snapshot.vertexStartAddr = vertexAddr;
+	
+	// Debug disabled - we found the vertex addresses
+	// TOP=96 -> vertices at 0x0E80, TOP=560 -> vertices at 0x2B80
 
 
 	// Parse MVP matrix from VU1 memory
@@ -89,13 +90,6 @@ void VU1InputCapture::OnVU1Execute(const u8* vuMem, u32 itop, u32 top)
 	{
 		m_snapshots.push_back(std::move(snapshot));
 		m_captureCount++;
-
-		// Debug: print occasionally
-		if (m_captureCount % 5000 == 1)
-		{
-			printf("VU1Capture: %u verts at 0x%X (total: %u)\n",
-				m_snapshots.back().vertexCount, m_snapshots.back().vertexStartAddr, m_captureCount);
-		}
 	}
 }
 
@@ -134,11 +128,13 @@ void VU1InputCapture::ParseVertices(VU1InputSnapshot& snapshot, const u8* vuMem,
 		if (std::abs(vertData[0]) > 100000.0f || std::abs(vertData[1]) > 100000.0f || std::abs(vertData[2]) > 100000.0f)
 			break;
 
-		// Check for end-of-data marker (often all zeros or special value)
-		if (vertData[0] == 0.0f && vertData[1] == 0.0f && vertData[2] == 0.0f && vertData[3] == 0.0f)
+	// FFX vertex data has W=1.0 for valid vertices
+		// Stop when we hit data that doesn't look like a valid vertex
+		// (W != 1.0 or all zeros)
+		if (vertData[3] != 1.0f)
 		{
-			// Could be padding - check if next vertex is also zero
-			if (i > 0)
+			// Allow a few non-1.0 W values at the start (might be header)
+			if (i > 5)
 				break;
 		}
 

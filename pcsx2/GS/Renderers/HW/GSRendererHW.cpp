@@ -5123,6 +5123,44 @@ void GSRendererHW::SetupIA(float target_scale, float sx, float sy, bool req_vert
 
 void GSRendererHW::ApplyMeshReplacement()
 {
+	// Dump GS vertex data for comparison with VU1 input (always runs)
+	static u32 gs_dump_counter = 0;
+	static bool gs_dump_done = false;
+	// Only count draws with 10+ vertices (skip simple quads/UI)
+	if (!gs_dump_done && m_vertex.next >= 10 && m_vertex.next <= 500)
+	{
+		gs_dump_counter++;
+		if (gs_dump_counter >= 1 && gs_dump_counter <= 25)  // Dump first 25 larger draws
+		{
+			printf("\n=== GS Draw #%u: %u verts, %u indices, topology=%d ===",
+				gs_dump_counter, m_vertex.next, m_index.tail, static_cast<int>(m_vt.m_primclass));
+			printf("\nGS Vertices (screen-space, fixed-point 12.4):\n");
+			for (u32 i = 0; i < m_vertex.next && i < 12; i++)
+			{
+				const GSVertex& v = m_vertex.buff[i];
+				float x = static_cast<float>(v.XYZ.X) / 16.0f;
+				float y = static_cast<float>(v.XYZ.Y) / 16.0f;
+				float z = static_cast<float>(v.XYZ.Z);
+				printf("  [%u] pos=(%.2f, %.2f, %.0f) uv=(%.2f, %.2f) rgba=(%u,%u,%u,%u)\n",
+					i, x, y, z, v.ST.S, v.ST.T, v.RGBAQ.R, v.RGBAQ.G, v.RGBAQ.B, v.RGBAQ.A);
+			}
+			if (m_index.tail > 0)
+			{
+				printf("Indices (first 18): ");
+				for (u32 i = 0; i < m_index.tail && i < 18; i++)
+				{
+					printf("%u ", m_index.buff[i]);
+				}
+				printf("\n");
+			}
+		}
+		if (gs_dump_counter > 25)
+		{
+			gs_dump_done = true;
+			printf("\n=== GS dump complete ===\n");
+		}
+	}
+
 	if (!g_mesh_replace_registry.IsEnabled() || !m_process_texture)
 		return;
 
